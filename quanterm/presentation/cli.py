@@ -1,0 +1,160 @@
+"""
+Command line interface (local presentation tier).
+
+  py -m quanterm demo                     load the example organisation
+  py -m quanterm tree                     show the organisation
+  py -m quanterm risks                    list risks with expected annual loss
+  py -m quanterm simulate [--compare]     Monte Carlo report
+  py -m quanterm export FILE / import FILE
+  py -m quanterm serve [--port 8000]      start the REST API
+
+The backend is chosen with QUANTERM_BACKEND or --backend (json, sql, neo4j).
+"""
+
+import argparse
+import json
+import logging
+import sys
+from typing import Any, Dict, List
+
+from ..config import Settings
+from ..domain import risk_model
+from ..domain.errors import DomainError
+from ..services import RiskService
+from ..services.demo import seed_demo
+from ..storage import create_repository
+
+
+def money(value: float) -> str:
+    return f"{value:>14,.0f}"
+
+
+def print_report(report: Dict[str, Any], title: str) -> None:
+    t = report["total"]
+    print(f"\n=== {title} ({report['n_trials']:,} simulated years) ===")
+    print(f"Expected annual loss : {money(t['mean'])}")
+    print(f"Median (P50)         : {money(t['p50'])}")
+    print(f"P90                  : {money(t['p90'])}")
+    print(f"VaR 99 (P99)         : {money(t['p99'])}")
+    print(f"TVaR 99              : {money(t['tvar99'])}")
+    print(f"Diversification P99  : {money(report['diversification_benefit_p99'])}")
+
+    print(f"\n{'Risk':<32}{'EAL':>14}{'P90':>14}{'P99':>14}{'P(loss)':>9}")
+    for r in report["risks"]:
+        print(f"{r['name'][:31]:<32}{money(r['mean'])}{money(r['p90'])}{money(r['p99'])}"
+              f"{r['prob_any_loss']:>9.1%}")
+
+    print(f"\n{'Business unit (incl. children)':<32}{'EAL':>14}{'P90':>14}{'P99':>14}")
+    for u in sorted(report["business_units"], key=lambda u: u["rolled_up"]["mean"], reverse=True):
+        ru = u["rolled_up"]
+        if ru["mean"] > 0:
+            print(f"{u['name'][:31]:<32}{money(ru['mean'])}{money(ru['p90'])}{money(ru['p99'])}")
+
+
+def print_tree(nodes: List[Dict[str, Any]], indent: int = 0) -> None:
+    for n in nodes:
+        print("  " * indent + f"- {n['name']}  ({n['id'][:8]})")
+        print_tree(n["children"], indent + 1)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="quanterm", description="quantyERM - quantitative risk management")
+    p.add_argument("--backend", choices=["json", "sql", "neo4j", "memory"],
+                   help="overrides QUANTERM_BACKEND")
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("demo", help="replace all data with the example organisation")
+    sub.add_parser("tree", help="show the organisation hierarchy")
+    sub.add_parser("risks", help="list risks with analytical expected annual loss")
+
+    sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
+    sim.add_argument("--trials", type=int, default=50_000)
+    sim.add_argument("--seed", type=int, default=42)
+    sim.add_argument("--inherent", action="store_true", help="ignore controls (residual specs)")
+    sim.add_argument("--compare", action="store_true", help="show inherent and residual")
+    sim.add_argument("--json", metavar="FILE", help="also write the full report to FILE")
+
+    exp = sub.add_parser("export", help="export all data to a JSON file")
+    exp.add_argument("file")
+    imp = sub.add_parser("import", help="import a JSON export (replaces data)")
+    imp.add_argument("file")
+    imp.add_argument("--merge", action="store_true", help="keep existing data")
+
+    srv = sub.add_parser("serve", help="start the REST API")
+    srv.add_argument("--host", default="127.0.0.1")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.add_argument("--reload", action="store_true")
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    settings = Settings()
+    if args.backend:
+        settings.backend = args.backend
+
+    if args.command == "serve":
+        import os
+        import uvicorn
+        os.environ["QUANTERM_BACKEND"] = settings.backend
+        uvicorn.run("quanterm.presentation.api:create_app", factory=True,
+                    host=args.host, port=args.port, reload=args.reload)
+        return 0
+
+    try:
+        with create_repository(settings) as repo:
+            svc = RiskService(repo)
+            return run(args, svc)
+    except DomainError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def run(args, svc: RiskService) -> int:
+    if args.command == "demo":
+        seed_demo(svc)
+        c = svc.dashboard_summary()["counts"]
+        print(f"Demo data loaded: {c['business_units']} business units, {c['assets']} assets, "
+              f"{c['persons']} persons, {c['risks']} risks.")
+
+    elif args.command == "tree":
+        print_tree(svc.organisation_tree())
+
+    elif args.command == "risks":
+        units = {u.id: u.name for u in svc.list_business_units()}
+        print(f"{'Risk':<28}{'Unit':<22}{'Category':<13}{'EAL (residual)':>15}")
+        for r in svc.list_risks():
+            eal = risk_model.expected_annual_loss(r.residual_frequency or r.frequency,
+                                                  r.residual_impact or r.impact)
+            print(f"{r.name[:27]:<28}{units.get(r.business_unit_id, '?')[:21]:<22}"
+                  f"{(r.category or '')[:12]:<13}{eal:>15,.0f}")
+
+    elif args.command == "simulate":
+        if args.compare:
+            result = svc.compare_inherent_residual(args.trials, args.seed)
+            print_report(result["inherent"], "Inherent risk")
+            print_report(result["residual"], "Residual risk (after controls)")
+            print(f"\nControls reduce expected annual loss by {result['reduction_in_expected_loss']:,.0f}"
+                  f" and P99 by {result['reduction_in_p99']:,.0f}")
+        else:
+            result = svc.simulation_report(args.trials, args.seed, residual=not args.inherent)
+            print_report(result, "Inherent risk" if args.inherent else "Residual risk")
+        if args.json:
+            with open(args.json, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            print(f"Report written to {args.json}")
+
+    elif args.command == "export":
+        with open(args.file, "w", encoding="utf-8") as f:
+            json.dump(svc.export_data(), f, indent=2)
+        print(f"Exported to {args.file}")
+
+    elif args.command == "import":
+        with open(args.file, "r", encoding="utf-8") as f:
+            counts = svc.import_data(json.load(f), replace=not args.merge)
+        print("Imported:", ", ".join(f"{v} {k}" for k, v in counts.items()))
+
+    return 0
