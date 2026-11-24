@@ -1,0 +1,5 @@
+__pycache__/
+*.log
+risk_management_data.json
+risk_simulation_*.json
+risk_data_export_*.json
