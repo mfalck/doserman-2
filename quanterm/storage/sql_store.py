@@ -1,63 +1,54 @@
 """
 Relational backend via SQLAlchemy (SQLite, PostgreSQL, SQL Server, ...).
 
-Scalar fields become columns; list/dict fields (delegate_ids, asset_ids,
-distribution specs, controls) are stored in JSON columns.
+Tables are generated from the domain dataclasses: str -> VARCHAR/TEXT,
+int/float -> INTEGER/FLOAT, list/dict fields -> JSON columns.
+No foreign keys on purpose: referential rules and cascades live in the
+service layer, so every backend behaves identically.
+
+Note: `create_all` creates missing tables but does not add new columns to
+existing ones. After a model change, migrate with export -> new DB -> import.
 """
 
+import typing
 from typing import Any, Dict, List, Optional, Type
 
-from sqlalchemy import JSON, Column, MetaData, String, Table, Text, create_engine, delete, insert, select
+from sqlalchemy import (JSON, Column, Float, Integer, MetaData, String, Table, Text, create_engine, delete, insert,
+                        select)
 
-from ..domain.models import Asset, BusinessUnit, Entity, Person, Risk
+from ..domain.models import ENTITY_TYPES, Entity
 from .base import E, Repository
 
 metadata = MetaData()
+LONG_TEXT = {"description", "details", "impact_description"}
 
-TABLES: Dict[Type[Entity], Table] = {
-    Person: Table(
-        "persons", metadata,
-        Column("id", String(36), primary_key=True),
-        Column("name", String(200), nullable=False),
-        Column("title", String(200)),
-        Column("email", String(200)),
-    ),
-    BusinessUnit: Table(
-        "business_units", metadata,
-        Column("id", String(36), primary_key=True),
-        Column("name", String(200), nullable=False),
-        Column("description", Text),
-        Column("parent_id", String(36), index=True),
-        Column("risk_owner_id", String(36)),
-        Column("delegate_ids", JSON, nullable=False, default=list),
-    ),
-    Asset: Table(
-        "assets", metadata,
-        Column("id", String(36), primary_key=True),
-        Column("name", String(200), nullable=False),
-        Column("asset_type", String(50), nullable=False),
-        Column("business_unit_id", String(36), index=True, nullable=False),
-        Column("description", Text),
-        Column("criticality", String(20)),
-    ),
-    Risk: Table(
-        "risks", metadata,
-        Column("id", String(36), primary_key=True),
-        Column("name", String(200), nullable=False),
-        Column("business_unit_id", String(36), index=True, nullable=False),
-        Column("frequency", JSON, nullable=False),
-        Column("impact", JSON, nullable=False),
-        Column("description", Text),
-        Column("category", String(50)),
-        Column("asset_ids", JSON, nullable=False, default=list),
-        Column("owner_id", String(36)),
-        Column("residual_frequency", JSON),
-        Column("residual_impact", JSON),
-        Column("controls", JSON, nullable=False, default=list),
-    ),
-}
-# No foreign keys on purpose: referential rules and cascades live in the
-# service layer, so every backend behaves identically.
+
+def _column(name: str, hint: Any) -> Column:
+    optional = type(None) in typing.get_args(hint)
+    base = next((a for a in typing.get_args(hint) if a is not type(None)), hint) if optional else hint
+    origin = typing.get_origin(base) or base
+    if name == "id":
+        return Column("id", String(64), primary_key=True)
+    if origin in (list, dict, List, Dict):
+        col_type = JSON
+    elif base is float:
+        col_type = Float
+    elif base is int:
+        col_type = Integer
+    elif name in LONG_TEXT:
+        col_type = Text
+    else:
+        col_type = String(255)
+    indexed = name.endswith("_id") and origin not in (list, dict)
+    return Column(name, col_type, nullable=optional or origin in (list, dict), index=indexed)
+
+
+def _table(cls: Type[Entity]) -> Table:
+    hints = typing.get_type_hints(cls)
+    return Table(cls.kind + "s", metadata, *[_column(n, hints[n]) for n in cls.field_names()])
+
+
+TABLES: Dict[Type[Entity], Table] = {cls: _table(cls) for cls in ENTITY_TYPES}
 
 
 class SqlRepository(Repository):

@@ -8,7 +8,7 @@ def test_save_get_roundtrip_keeps_all_fields(repo):
     risk = Risk(name="R", business_unit_id="bu1",
                 frequency={"type": "poisson", "rate": 0.5},
                 impact={"dist": "pert", "min": 1, "mode": 2, "max": 3},
-                asset_ids=["a1", "a2"], controls=["c"], residual_impact={"dist": "fixed", "value": 1})
+                asset_ids=["a1", "a2"], residual_impact={"dist": "fixed", "value": 1})
     repo.save(risk)
     assert repo.get(Risk, risk.id) == risk
 

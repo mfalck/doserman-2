@@ -1,14 +1,21 @@
 """
 Domain entities. Plain dataclasses with no knowledge of storage or presentation.
 
-Relations are stored as IDs on the "child" side:
-  BusinessUnit.parent_id, Asset.business_unit_id, Risk.business_unit_id, ...
-so every backend can persist them the same way.
+Relations are stored as IDs on the referring side (see REFERENCES), so every
+backend can persist them the same way and the service layer can check them.
 """
 
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import uuid4
+
+ORGANIZATION_TYPES = ("COMPANY", "DEPARTMENT", "SUBSIDIARY", "SUPPLIER")
+CONTROL_TYPES = ("PREVENTIVE", "DETECTIVE", "CORRECTIVE", "DIRECTIVE")
+IMPLEMENTATION_STATUSES = ("PLANNED", "IN_PROGRESS", "IMPLEMENTED", "RETIRED")
+RISK_EVENT_TYPES = ("INCIDENT", "NEAR_MISS", "AUDIT_FINDING")
+RISK_EVENT_STATUSES = ("OPEN", "INVESTIGATING", "CLOSED")
+CONTROL_EVENT_TYPES = ("TEST", "REVIEW", "AUDIT")
+CONTROL_EVENT_STATUSES = ("PASSED", "FAILED", "PARTIAL", "IN_PROGRESS")
 
 
 def new_id() -> str:
@@ -19,6 +26,8 @@ def new_id() -> str:
 class Entity:
     kind: ClassVar[str] = "entity"
     id: str = field(default_factory=new_id, kw_only=True)
+    created_at: Optional[str] = field(default=None, kw_only=True)  # ISO timestamps, set by the service
+    updated_at: Optional[str] = field(default=None, kw_only=True)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -39,6 +48,8 @@ class BusinessUnit(Entity):
     name: str
     description: Optional[str] = None
     parent_id: Optional[str] = None
+    code: Optional[str] = None
+    organization_type: str = "DEPARTMENT"
     risk_owner_id: Optional[str] = None
     delegate_ids: List[str] = field(default_factory=list)
 
@@ -51,6 +62,7 @@ class Asset(Entity):
     business_unit_id: str
     description: Optional[str] = None
     criticality: Optional[str] = None  # e.g. "low", "medium", "high", "critical"
+    value: Optional[float] = None
 
 
 @dataclass
@@ -66,7 +78,8 @@ class Risk(Entity):
     """
     A quantified risk. `frequency` and `impact` are distribution specs
     (see risk_model.py) for the inherent risk; the optional residual_*
-    specs describe the risk after controls.
+    specs describe the risk after controls. Qualitative 1-5 scores are
+    derived from these specs, never stored.
     """
     kind: ClassVar[str] = "risk"
     name: str
@@ -74,12 +87,79 @@ class Risk(Entity):
     frequency: Dict[str, Any]
     impact: Dict[str, Any]
     description: Optional[str] = None
-    category: Optional[str] = None  # e.g. "cyber", "operational", "financial"
+    category: Optional[str] = None  # risk type, e.g. "cyber", "operational"
     asset_ids: List[str] = field(default_factory=list)
     owner_id: Optional[str] = None
     residual_frequency: Optional[Dict[str, Any]] = None
     residual_impact: Optional[Dict[str, Any]] = None
-    controls: List[str] = field(default_factory=list)
 
 
-ENTITY_TYPES = (BusinessUnit, Asset, Person, Risk)
+@dataclass
+class Control(Entity):
+    kind: ClassVar[str] = "control"
+    name: str
+    business_unit_id: str
+    description: Optional[str] = None
+    control_type: str = "PREVENTIVE"
+    implementation_status: str = "PLANNED"
+    effectiveness_rating: Optional[int] = None  # 1 (weak) .. 5 (strong)
+    owner_id: Optional[str] = None
+    risk_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class RiskEvent(Entity):
+    """Something that happened: an incident, near miss or audit finding."""
+    kind: ClassVar[str] = "risk_event"
+    name: str
+    risk_id: str
+    date: str  # ISO date
+    event_type: str = "INCIDENT"
+    status: str = "OPEN"
+    description: Optional[str] = None
+    impact_description: Optional[str] = None
+    financial_impact: Optional[float] = None
+
+
+@dataclass
+class ControlEvent(Entity):
+    """A test, review or audit of a control."""
+    kind: ClassVar[str] = "control_event"
+    control_id: str
+    date: str  # ISO date
+    event_type: str = "TEST"
+    status: str = "IN_PROGRESS"
+    description: Optional[str] = None
+
+
+@dataclass
+class AuditEntry(Entity):
+    """Written by the service on every change; not part of export/import."""
+    kind: ClassVar[str] = "audit_entry"
+    action: str  # CREATE, UPDATE, DELETE, IMPORT
+    entity_type: str
+    entity_id: Optional[str] = None
+    details: Optional[str] = None
+    user_id: str = "system"
+    timestamp: str = ""
+
+
+# Data entities in dependency order (referenced types first)
+DATA_TYPES = (Person, BusinessUnit, Asset, Risk, Control, RiskEvent, ControlEvent)
+ENTITY_TYPES = DATA_TYPES + (AuditEntry,)
+
+# (from type, field, to type, field is a list, graph relationship name)
+REFERENCES = [
+    (BusinessUnit, "parent_id", BusinessUnit, False, "CHILD_OF"),
+    (BusinessUnit, "risk_owner_id", Person, False, "HAS_RISK_OWNER"),
+    (BusinessUnit, "delegate_ids", Person, True, "HAS_DELEGATE"),
+    (Asset, "business_unit_id", BusinessUnit, False, "BELONGS_TO"),
+    (Risk, "business_unit_id", BusinessUnit, False, "BELONGS_TO"),
+    (Risk, "asset_ids", Asset, True, "AFFECTS"),
+    (Risk, "owner_id", Person, False, "OWNED_BY"),
+    (Control, "business_unit_id", BusinessUnit, False, "BELONGS_TO"),
+    (Control, "owner_id", Person, False, "OWNED_BY"),
+    (Control, "risk_ids", Risk, True, "MITIGATES"),
+    (RiskEvent, "risk_id", Risk, False, "RELATED_TO"),
+    (ControlEvent, "control_id", Control, False, "TESTS"),
+]

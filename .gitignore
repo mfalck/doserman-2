@@ -6,3 +6,4 @@ risk_data_export_*.json
 quanterm_data.json
 quanterm.db
 .pytest_cache/
+.claude/

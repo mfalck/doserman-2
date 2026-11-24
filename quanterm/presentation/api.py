@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..config import Settings
+from ..domain import models as m
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..services import RiskService
 from ..storage import create_repository
@@ -64,12 +65,32 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def _conflict(_: Request, exc: ConflictError):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    async def require_api_key(x_api_key: Optional[str] = Header(None)):
+    async def require_api_key(x_api_key: Optional[str] = Header(None),
+                              x_user_id: Optional[str] = Header(None)):
         if settings.api_key and x_api_key != settings.api_key:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid X-API-Key header")
+        # Informational only until real authentication exists: recorded in the audit log.
+        svc.actor = (x_user_id or "anonymous")[:100]
 
     # every /api route shares the API-key check
     api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
+
+    @api.get("/meta", tags=["meta"])
+    async def meta():
+        """Allowed values and scoring thresholds, for building forms."""
+        return {
+            "organization_types": m.ORGANIZATION_TYPES,
+            "control_types": m.CONTROL_TYPES,
+            "implementation_statuses": m.IMPLEMENTATION_STATUSES,
+            "risk_event_types": m.RISK_EVENT_TYPES,
+            "risk_event_statuses": m.RISK_EVENT_STATUSES,
+            "control_event_types": m.CONTROL_EVENT_TYPES,
+            "control_event_statuses": m.CONTROL_EVENT_STATUSES,
+            "frequency_types": ["poisson", "bernoulli"],
+            "impact_distributions": ["lognorm_p10_p90", "pert", "triangular", "uniform", "fixed"],
+            "scoring": {"likelihood_bands": svc.scoring.likelihood_bands,
+                        "impact_bands": svc.scoring.impact_bands},
+        }
 
     @app.get("/health", tags=["meta"])
     async def health():
@@ -84,6 +105,10 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.get("/business-units/tree", tags=["organisation"])
     async def organisation_tree():
         return svc.organisation_tree()
+
+    @api.get("/business-units/risk-summary", tags=["organisation"])
+    async def unit_risk_summary():
+        return svc.unit_risk_summary()
 
     @api.post("/business-units", response_model=s.BusinessUnitOut, status_code=201, tags=["organisation"])
     async def create_business_unit(body: s.BusinessUnitCreate):
@@ -165,25 +190,94 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.get("/risks", response_model=List[s.RiskOut], tags=["risks"])
     async def list_risks(business_unit_id: Optional[str] = None, category: Optional[str] = None,
                          include_children: bool = False):
-        return [r.to_dict() for r in svc.list_risks(business_unit_id, category, include_children)]
+        return svc.list_risk_views(unit_id=business_unit_id, category=category,
+                                   include_children=include_children)
 
     @api.post("/risks", response_model=s.RiskOut, status_code=201, tags=["risks"])
     async def create_risk(body: s.RiskCreate):
         d = body.model_dump()
-        return svc.create_risk(d.pop("business_unit_id"), d.pop("name"),
-                               d.pop("frequency"), d.pop("impact"), **d).to_dict()
+        return svc.risk_view(svc.create_risk(d.pop("business_unit_id"), d.pop("name"),
+                                             d.pop("frequency"), d.pop("impact"), **d))
 
     @api.get("/risks/{risk_id}", response_model=s.RiskOut, tags=["risks"])
     async def get_risk(risk_id: str):
-        return svc.get_risk(risk_id).to_dict()
+        return svc.risk_view(svc.get_risk(risk_id))
 
     @api.patch("/risks/{risk_id}", response_model=s.RiskOut, tags=["risks"])
     async def update_risk(risk_id: str, body: s.RiskUpdate):
-        return svc.update_risk(risk_id, **_changes(body)).to_dict()
+        return svc.risk_view(svc.update_risk(risk_id, **_changes(body)))
 
     @api.delete("/risks/{risk_id}", status_code=204, tags=["risks"])
     async def delete_risk(risk_id: str):
         svc.delete_risk(risk_id)
+
+    # -- controls -----------------------------------------------------------
+
+    @api.get("/controls", response_model=List[s.ControlOut], tags=["controls"])
+    async def list_controls(business_unit_id: Optional[str] = None, risk_id: Optional[str] = None):
+        return [c.to_dict() for c in svc.list_controls(business_unit_id, risk_id)]
+
+    @api.post("/controls", response_model=s.ControlOut, status_code=201, tags=["controls"])
+    async def create_control(body: s.ControlCreate):
+        d = body.model_dump()
+        return svc.create_control(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
+
+    @api.get("/controls/{control_id}", response_model=s.ControlOut, tags=["controls"])
+    async def get_control(control_id: str):
+        return svc.get_control(control_id).to_dict()
+
+    @api.patch("/controls/{control_id}", response_model=s.ControlOut, tags=["controls"])
+    async def update_control(control_id: str, body: s.ControlUpdate):
+        return svc.update_control(control_id, **_changes(body)).to_dict()
+
+    @api.delete("/controls/{control_id}", status_code=204, tags=["controls"])
+    async def delete_control(control_id: str):
+        svc.delete_control(control_id)
+
+    # -- risk events --------------------------------------------------------
+
+    @api.get("/risk-events", response_model=List[s.RiskEventOut], tags=["events"])
+    async def list_risk_events(risk_id: Optional[str] = None, business_unit_id: Optional[str] = None):
+        return [e.to_dict() for e in svc.list_risk_events(risk_id, business_unit_id)]
+
+    @api.post("/risk-events", response_model=s.RiskEventOut, status_code=201, tags=["events"])
+    async def create_risk_event(body: s.RiskEventCreate):
+        d = body.model_dump()
+        return svc.create_risk_event(d.pop("risk_id"), d.pop("name"), d.pop("date"), **d).to_dict()
+
+    @api.patch("/risk-events/{event_id}", response_model=s.RiskEventOut, tags=["events"])
+    async def update_risk_event(event_id: str, body: s.RiskEventUpdate):
+        return svc.update_risk_event(event_id, **_changes(body)).to_dict()
+
+    @api.delete("/risk-events/{event_id}", status_code=204, tags=["events"])
+    async def delete_risk_event(event_id: str):
+        svc.delete_risk_event(event_id)
+
+    # -- control events -----------------------------------------------------
+
+    @api.get("/control-events", response_model=List[s.ControlEventOut], tags=["events"])
+    async def list_control_events(control_id: Optional[str] = None, business_unit_id: Optional[str] = None,
+                                  status: Optional[str] = None):
+        return [e.to_dict() for e in svc.list_control_events(control_id, business_unit_id, status)]
+
+    @api.post("/control-events", response_model=s.ControlEventOut, status_code=201, tags=["events"])
+    async def create_control_event(body: s.ControlEventCreate):
+        d = body.model_dump()
+        return svc.create_control_event(d.pop("control_id"), d.pop("date"), **d).to_dict()
+
+    @api.patch("/control-events/{event_id}", response_model=s.ControlEventOut, tags=["events"])
+    async def update_control_event(event_id: str, body: s.ControlEventUpdate):
+        return svc.update_control_event(event_id, **_changes(body)).to_dict()
+
+    @api.delete("/control-events/{event_id}", status_code=204, tags=["events"])
+    async def delete_control_event(event_id: str):
+        svc.delete_control_event(event_id)
+
+    # -- audit log ----------------------------------------------------------
+
+    @api.get("/audit-log", response_model=List[s.AuditEntryOut], tags=["audit"])
+    async def audit_log(limit: int = 1000, entity_type: Optional[str] = None, action: Optional[str] = None):
+        return [a.to_dict() for a in svc.list_audit(limit, entity_type, action)]
 
     # -- analysis -----------------------------------------------------------
 
@@ -196,8 +290,8 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         return svc.simulation_report(**body.model_dump())
 
     @api.post("/simulations/compare", tags=["analysis"])
-    async def compare(n_trials: int = 10_000, seed: int = 42):
-        return svc.compare_inherent_residual(n_trials, seed)
+    async def compare(n_trials: int = 10_000, seed: int = 42, unit_id: Optional[str] = None):
+        return svc.compare_inherent_residual(n_trials, seed, unit_id)
 
     # -- import / export ----------------------------------------------------
 

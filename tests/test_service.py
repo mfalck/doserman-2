@@ -109,7 +109,8 @@ def test_export_import_roundtrip_preserves_ids_and_results(svc):
     before = svc.simulation_report(n_trials=1_000, seed=9)["total"]
     svc.repo.clear()
     counts = svc.import_data(data)
-    assert counts == {"person": 5, "business_unit": 7, "asset": 4, "risk": 7}
+    assert counts == {"person": 5, "business_unit": 7, "asset": 4, "risk": 7,
+                      "control": 5, "risk_event": 3, "control_event": 4}
     assert svc.simulation_report(n_trials=1_000, seed=9)["total"] == before
 
 
@@ -126,6 +127,6 @@ def test_dashboard_summary(svc):
     seed_demo(svc)
     d = svc.dashboard_summary()
     assert d["counts"]["risks"] == 7
-    assert d["counts"]["risks_with_controls"] == 2
+    assert d["counts"]["risks_with_controls"] == 3
     assert sum(d["risks_by_category"].values()) == 7
     assert d["top_risks"][0]["expected_annual_loss"] >= d["top_risks"][-1]["expected_annual_loss"]

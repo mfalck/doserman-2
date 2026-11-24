@@ -122,6 +122,66 @@ def expected_annual_loss(frequency: Dict[str, Any], impact: Dict[str, Any]) -> f
     return en * ex
 
 
+# =========================================================================
+# Qualitative scores (1-5) derived from the quantitative specs
+# =========================================================================
+
+# Likelihood: probability of at least one event per year
+DEFAULT_LIKELIHOOD_BANDS = (0.05, 0.20, 0.50, 0.80)
+# Impact: median loss of a single event (currency units)
+DEFAULT_IMPACT_BANDS = (50_000, 250_000, 1_000_000, 5_000_000)
+SEVERITY_LEVELS = ("Very Low", "Low", "Medium", "High", "Very High")
+
+
+def annual_event_probability(frequency: Dict[str, Any]) -> float:
+    """P(at least one event in a year)."""
+    validate_frequency(frequency)
+    if frequency["type"] == "poisson":
+        return float(1 - np.exp(-float(frequency["rate"])))
+    return float(frequency["p"])
+
+
+def typical_event_loss(impact: Dict[str, Any]) -> float:
+    """Median loss of one event."""
+    dist = build_impact_distribution(impact)
+    return float(impact["value"]) if dist is None else float(dist.median())
+
+
+def to_band(value: float, bands) -> int:
+    """1 + number of thresholds reached -> 1..len(bands)+1."""
+    return 1 + sum(1 for b in bands if value >= b)
+
+
+def severity_level(score: int) -> str:
+    """Score = likelihood x impact (1..25) -> label, same cut-offs as a 5x5 heat map."""
+    if score >= 16:
+        return "Very High"
+    if score >= 9:
+        return "High"
+    if score >= 4:
+        return "Medium"
+    if score >= 2:
+        return "Low"
+    return "Very Low"
+
+
+def risk_scores(frequency: Dict[str, Any], impact: Dict[str, Any],
+                likelihood_bands=DEFAULT_LIKELIHOOD_BANDS,
+                impact_bands=DEFAULT_IMPACT_BANDS) -> Dict[str, Any]:
+    likelihood = to_band(annual_event_probability(frequency), likelihood_bands)
+    impact_score = to_band(typical_event_loss(impact), impact_bands)
+    score = likelihood * impact_score
+    return {
+        "likelihood": likelihood,
+        "impact": impact_score,
+        "score": score,
+        "level": severity_level(score),
+        "annual_probability": annual_event_probability(frequency),
+        "typical_event_loss": typical_event_loss(impact),
+        "expected_annual_loss": expected_annual_loss(frequency, impact),
+    }
+
+
 def summarize_distribution(dist_type: str, **params) -> Dict[str, Any]:
     """
     Analytical summary (P10/P50/P90, mean, std, skew, kurtosis)

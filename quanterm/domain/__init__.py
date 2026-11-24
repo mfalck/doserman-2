@@ -1,7 +1,9 @@
 from .errors import ConflictError, DomainError, NotFoundError, ValidationError
-from .models import ENTITY_TYPES, Asset, BusinessUnit, Entity, Person, Risk
+from .models import (DATA_TYPES, ENTITY_TYPES, REFERENCES, Asset, AuditEntry, BusinessUnit, Control,
+                     ControlEvent, Entity, Person, Risk, RiskEvent)
 
 __all__ = [
-    "Asset", "BusinessUnit", "Entity", "ENTITY_TYPES", "Person", "Risk",
+    "Asset", "AuditEntry", "BusinessUnit", "Control", "ControlEvent", "Entity", "Person", "Risk",
+    "RiskEvent", "DATA_TYPES", "ENTITY_TYPES", "REFERENCES",
     "ConflictError", "DomainError", "NotFoundError", "ValidationError",
 ]

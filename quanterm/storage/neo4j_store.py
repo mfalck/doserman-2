@@ -1,46 +1,28 @@
 """
 Neo4j backend.
 
-Each entity is a node (:BusinessUnit, :Asset, :Person, :Risk). Its fields
-are node properties and are the source of truth; dict fields (distribution
-specs) are stored as JSON strings because Neo4j properties cannot be maps.
+Each entity is a node labelled after its type (:BusinessUnit, :Risk, ...).
+Its fields are node properties and are the source of truth; dict fields
+(distribution specs) are stored as JSON strings because Neo4j properties
+cannot be maps.
 
-On every save the relationships below are (re)built from those properties,
-in both directions, so the graph can be queried directly in Cypher:
-
-  (:BusinessUnit)-[:CHILD_OF]->(:BusinessUnit)
-  (:BusinessUnit)-[:HAS_RISK_OWNER]->(:Person)
-  (:BusinessUnit)-[:HAS_DELEGATE]->(:Person)
-  (:Asset)-[:BELONGS_TO]->(:BusinessUnit)
-  (:Risk)-[:BELONGS_TO]->(:BusinessUnit)
-  (:Risk)-[:AFFECTS]->(:Asset)
-  (:Risk)-[:OWNED_BY]->(:Person)
+On every save the relationships in models.REFERENCES are (re)built from
+those properties, in both directions, so the graph can be queried directly
+in Cypher, e.g. (:Risk)-[:BELONGS_TO]->(:BusinessUnit),
+(:Control)-[:MITIGATES]->(:Risk), (:RiskEvent)-[:RELATED_TO]->(:Risk).
 """
 
 import json
 from dataclasses import fields
 from typing import Any, Dict, List, Optional, Type
 
-from ..domain.models import ENTITY_TYPES, Asset, BusinessUnit, Entity, Person, Risk
+from ..domain.models import ENTITY_TYPES, REFERENCES, Entity
 from .base import E, Repository
 
-LABELS: Dict[Type[Entity], str] = {
-    BusinessUnit: "BusinessUnit",
-    Asset: "Asset",
-    Person: "Person",
-    Risk: "Risk",
-}
+LABELS: Dict[Type[Entity], str] = {cls: cls.__name__ for cls in ENTITY_TYPES}
 
 # (from type, property on the from-node, relationship, to type, property is a list)
-RELATIONSHIPS = [
-    (BusinessUnit, "parent_id", "CHILD_OF", BusinessUnit, False),
-    (BusinessUnit, "risk_owner_id", "HAS_RISK_OWNER", Person, False),
-    (BusinessUnit, "delegate_ids", "HAS_DELEGATE", Person, True),
-    (Asset, "business_unit_id", "BELONGS_TO", BusinessUnit, False),
-    (Risk, "business_unit_id", "BELONGS_TO", BusinessUnit, False),
-    (Risk, "asset_ids", "AFFECTS", Asset, True),
-    (Risk, "owner_id", "OWNED_BY", Person, False),
-]
+RELATIONSHIPS = [(src, prop, rel, dst, is_list) for src, prop, dst, is_list, rel in REFERENCES]
 
 
 def _dict_fields(cls: Type[Entity]) -> List[str]:
