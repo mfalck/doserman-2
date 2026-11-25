@@ -22,7 +22,7 @@ from typing import Any, Dict, List
 
 from ..config import Settings
 from ..domain import risk_model
-from ..domain.errors import DomainError
+from ..domain.errors import DomainError, NotFoundError
 from ..services import RiskService
 from ..services.demo import seed_demo
 from ..storage import create_repository
@@ -64,6 +64,17 @@ def print_tree(nodes: List[Dict[str, Any]], indent: int = 0) -> None:
         print_tree(n["children"], indent + 1)
 
 
+def _resolve_run(svc: RiskService, ref: str) -> str:
+    """Accepts a run number ("17" or "#17") or an id."""
+    ref = ref.lstrip("#")
+    if ref.isdigit():
+        for r in svc.list_runs(limit=100_000):
+            if r["number"] == int(ref):
+                return r["id"]
+        raise NotFoundError(f"Run #{ref} not found.")
+    return ref
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="riskmesh", description="RiskMesh - quantitative risk management")
     p.add_argument("--backend", choices=["json", "sql", "neo4j", "memory"],
@@ -85,6 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("--inherent", action="store_true", help="ignore controls (residual specs)")
     sim.add_argument("--compare", action="store_true", help="show inherent and residual")
     sim.add_argument("--json", metavar="FILE", help="also write the full report to FILE")
+    sim.add_argument("--label", help="name the run, e.g. 'Board meeting 2026-12-01'")
+    sim.add_argument("--no-cache", action="store_true", help="recalculate even if a stored run matches")
+
+    runs = sub.add_parser("runs", help="stored analysis runs")
+    runs_sub = runs.add_subparsers(dest="runs_command", required=True)
+    runs_sub.add_parser("list", help="list runs, newest first")
+    for name, text in (("show", "print a stored report"), ("reproduce", "recalculate and compare")):
+        rp = runs_sub.add_parser(name, help=text)
+        rp.add_argument("run", help="run number (e.g. 17) or id")
+    lb = runs_sub.add_parser("label", help="name a run")
+    lb.add_argument("run")
+    lb.add_argument("label")
 
     exp = sub.add_parser("export", help="export all data to a JSON file")
     exp.add_argument("file")
@@ -153,15 +176,19 @@ def run(args, svc: RiskService) -> int:
 
     elif args.command == "simulate":
         if args.compare:
-            result = svc.compare_inherent_residual(args.trials, args.seed, engine=args.engine)
+            result = svc.run_analysis("compare", args.engine, args.trials, args.seed, unit_id=None,
+                                      use_cache=not args.no_cache, label=args.label)
             print_report(result["inherent"], "Inherent risk")
             print_report(result["residual"], "Residual risk (after controls)")
             print(f"\nControls reduce expected annual loss by {result['reduction_in_expected_loss']:,.0f}"
                   f" and P99 by {result['reduction_in_p99']:,.0f}")
         else:
-            result = svc.simulation_report(args.trials, args.seed, residual=not args.inherent,
-                                           engine=args.engine)
+            result = svc.run_analysis("single", args.engine, args.trials, args.seed, residual=not args.inherent,
+                                      use_cache=not args.no_cache, label=args.label)
             print_report(result, "Inherent risk" if args.inherent else "Residual risk")
+        run = result["run"]
+        print(f"\nRun #{run['number']} ({'stored result reused' if run['cached'] else 'calculated now'}), "
+              f"fingerprint {run['fingerprint'][:16]}" + (f", '{run['label']}'" if run.get("label") else ""))
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=2)
@@ -178,6 +205,27 @@ def run(args, svc: RiskService) -> int:
         svc.source = f"import:{os.path.basename(args.file)}:sha256:{hashlib.sha256(raw).hexdigest()}"
         counts = svc.import_data(json.loads(raw.decode("utf-8")), replace=not args.merge)
         print("Imported:", ", ".join(f"{v} {k}" for k, v in counts.items()))
+
+    elif args.command == "runs":
+        if args.runs_command == "list":
+            for r in svc.list_runs():
+                print(f"#{r['number']:<4} {r['created_at'][:19]}  {r['created_by']:<12} {r['mode']:<8} "
+                      f"{r['engine']:<12} {'STALE' if r['stale'] else 'current':<8} {r.get('label') or ''}")
+        else:
+            run_id = _resolve_run(svc, args.run)
+            if args.runs_command == "show":
+                report = svc.get_run(run_id)
+                if report["run"]["mode"] == "compare":
+                    print_report(report["inherent"], "Inherent risk")
+                    print_report(report["residual"], "Residual risk (after controls)")
+                else:
+                    print_report(report, "Report")
+                print(f"\nRun #{report['run']['number']}" + ("  (data has changed since)" if report["run"]["stale"] else ""))
+            elif args.runs_command == "reproduce":
+                print(svc.reproduce_run(run_id)["message"])
+            elif args.runs_command == "label":
+                run = svc.label_run(run_id, args.label)
+                print(f"Run #{run.number} labelled '{run.label}'")
 
     elif args.command == "audit" and args.audit_command == "verify":
         result = svc.verify_audit(check_data=not args.chain_only)

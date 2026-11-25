@@ -89,6 +89,33 @@ On the demo data both agree within 0.4% for mean, P50, P90, P99 and TVaR 99
 `POST /api/simulations`, `engine=` on `/api/simulations/compare`, or
 `riskmesh simulate --engine monte_carlo`.
 
+### Stored results and the run register
+
+Every analysis is stored as a numbered **run** with a SHA-256 fingerprint of
+exactly what it depends on: the risks and units in scope (only the fields the
+calculation uses), the method, its settings and the engine version. Asking
+again while that data is unchanged returns the stored report instantly
+(`"cached": true`); a change to a description does not count, a change to a
+frequency does. Runs are never deleted: when the data changes a run is marked
+`stale`, but it remains the record of what was reported.
+
+Each run records who made it, when, the package version and the audit chain
+head at that moment; creating and naming runs are entries in the audit trail.
+A run that is not stale can be recalculated to show the result is identical.
+Monte Carlo without a seed is not repeatable and therefore never reused.
+
+```powershell
+py -m riskmesh simulate --compare --label "Board meeting 2026-12-01"
+py -m riskmesh runs list
+py -m riskmesh runs show 17
+py -m riskmesh runs reproduce 17
+```
+
+API: `POST /api/simulations` and `/api/simulations/compare` (`cache`, `label`),
+`GET /api/runs`, `GET/PATCH /api/runs/{id}`, `POST /api/runs/{id}/reproduce`.
+Reports are stored in the configured backend; storing whole distributions per
+risk (to recalculate only what changed) is a later step.
+
 ### Derived 1-5 scores
 
 The qualitative heat-map scores are calculated from the estimates, never typed in:

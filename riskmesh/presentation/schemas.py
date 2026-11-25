@@ -290,3 +290,9 @@ class SimulationRequest(_In):
     seed: Optional[int] = Field(None, description="Monte Carlo only")
     residual: bool = True
     unit_id: Optional[str] = Field(None, description="Only risks in this unit and its children")
+    cache: bool = Field(True, description="Reuse a stored run with the same data and settings")
+    label: Optional[str] = Field(None, max_length=200, description="Name the run, e.g. 'Board meeting'")
+
+
+class RunLabel(_In):
+    label: Optional[str] = Field(None, max_length=200)

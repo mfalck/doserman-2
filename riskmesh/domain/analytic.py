@@ -36,6 +36,7 @@ from .risk_model import DEFAULT_PERCENTILES, build_impact_distribution, validate
 SEVERITY_EPS = 1e-6       # severity tail beyond this quantile is collapsed onto it
 COUNT_EPS = 1e-9          # P(more events than the grid allows for)
 DEFAULT_POINTS = 2 ** 19  # grid size for units / total (524,288 points)
+ENGINE_VERSION = "analytic-1"  # bump when results change, so stored runs are not reused
 RISK_POINTS = 2 ** 18     # grid size for a single risk
 
 

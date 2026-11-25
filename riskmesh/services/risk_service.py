@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
 from ..domain import analytic, audit, risk_model
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
-from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
+from ..domain.models import (AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REFERENCES, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, Asset, AuditEntry, BusinessUnit, Control, ControlEvent, Entity,
                              Person, Risk, RiskEvent)
@@ -35,6 +35,11 @@ class ScoringScale:
     """Thresholds that turn quantitative specs into 1-5 scores."""
     likelihood_bands: tuple = risk_model.DEFAULT_LIKELIHOOD_BANDS  # P(>=1 event / year)
     impact_bands: tuple = risk_model.DEFAULT_IMPACT_BANDS          # median loss per event
+
+
+def _package_version() -> str:
+    from .. import __version__
+    return __version__
 
 
 def _now() -> str:
@@ -655,6 +660,139 @@ class RiskService:
             "reduction_in_expected_loss": inherent["total"]["mean"] - residual["total"]["mean"],
             "reduction_in_p99": inherent["total"]["p99"] - residual["total"]["p99"],
         }
+
+    # =====================================================================
+    # Analysis runs: stored results and the run register
+    # =====================================================================
+
+    def _analysis_inputs(self, unit_id: Optional[str]) -> Dict[str, Any]:
+        """Exactly the data a report depends on (and nothing else)."""
+        risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+        fields = ("id", "name", "business_unit_id", "frequency", "impact", "residual_frequency", "residual_impact")
+        return {
+            "risks": sorted(({f: getattr(r, f) for f in fields} for r in risks), key=lambda r: r["id"]),
+            "units": sorted(({"id": u.id, "name": u.name, "parent_id": u.parent_id}
+                             for u in self.repo.list(BusinessUnit)), key=lambda u: u["id"]),
+        }
+
+    @staticmethod
+    def _run_params(mode: str, engine: str, n_trials: int, seed: Optional[int], residual: bool,
+                    unit_id: Optional[str]) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"mode": mode, "engine": engine, "unit_id": unit_id}
+        if mode == "single":
+            params["residual"] = residual
+        if engine == "monte_carlo":
+            params.update(n_trials=n_trials, seed=seed, engine_version=risk_model.ENGINE_VERSION)
+        else:
+            params.update(grid_points=analytic.DEFAULT_POINTS, engine_version=analytic.ENGINE_VERSION)
+        return params
+
+    def analysis_fingerprint(self, params: Dict[str, Any]) -> str:
+        return audit.sha256({"params": params, "inputs": self._analysis_inputs(params.get("unit_id"))})
+
+    def run_analysis(self, mode: str = "compare", engine: str = "analytic", n_trials: int = 10_000,
+                     seed: Optional[int] = 42, residual: bool = True, unit_id: Optional[str] = None,
+                     use_cache: bool = True, label: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Returns the report for these settings. If an earlier run has the same
+        fingerprint (same data, engine and settings) its stored report is
+        returned instantly; otherwise it is calculated and stored as a new run.
+        The report carries a "run" block saying which run it is and whether it
+        was cached. Monte Carlo without a seed is never reused (not repeatable).
+        """
+        if mode not in ("single", "compare"):
+            raise ValidationError("mode must be 'single' or 'compare'.")
+        if engine not in ("analytic", "monte_carlo"):
+            raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
+        params = self._run_params(mode, engine, n_trials, seed, residual, unit_id)
+        fingerprint = self.analysis_fingerprint(params)
+        repeatable = not (engine == "monte_carlo" and seed is None)
+
+        if use_cache and repeatable:
+            previous = sorted(self.repo.list(AnalysisRun, fingerprint=fingerprint), key=lambda r: r.number)
+            if previous:
+                run = previous[-1]
+                if label and run.label != label:
+                    run = self.label_run(run.id, label)
+                return {**run.report, "run": self.run_meta(run, cached=True, fingerprint=fingerprint)}
+
+        started = datetime.now(timezone.utc)
+        if mode == "compare":
+            report = self.compare_inherent_residual(n_trials, seed if seed is not None else 42, unit_id, engine)
+        else:
+            report = self.simulation_report(n_trials, seed, residual, unit_id, engine)
+        duration = (datetime.now(timezone.utc) - started).total_seconds() * 1000
+
+        head_seq, head_hash = self._chain_head()
+        runs = self.repo.list(AnalysisRun)
+        run = AnalysisRun(number=max((r.number for r in runs), default=0) + 1, fingerprint=fingerprint,
+                          mode=mode, engine=engine, params=params, report=report, created_by=self.actor,
+                          package_version=_package_version(), audit_seq=head_seq, audit_hash=head_hash,
+                          duration_ms=round(duration, 1), label=label or None)
+        run.created_at = run.updated_at = _now()
+        self.repo.save(run)
+        self._audit("RUN", run.kind, run.id,
+                    f"run #{run.number}: {mode} {engine}" + (f" '{label}'" if label else ""),
+                    changes={"fingerprint": [None, fingerprint]})
+        return {**report, "run": self.run_meta(run, cached=False, fingerprint=fingerprint)}
+
+    def run_meta(self, run: AnalysisRun, cached: Optional[bool] = None,
+                  fingerprint: Optional[str] = None) -> Dict[str, Any]:
+        """Run information without the (large) report."""
+        current = fingerprint or self.analysis_fingerprint(run.params)
+        meta = {k: v for k, v in run.to_dict().items() if k != "report"}
+        meta["stale"] = current != run.fingerprint  # the data changed since this run
+        if cached is not None:
+            meta["cached"] = cached
+        return meta
+
+    def list_runs(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Newest first, without reports, each marked stale if the data has changed since."""
+        runs = sorted(self.repo.list(AnalysisRun), key=lambda r: r.number, reverse=True)[:max(1, limit)]
+        fingerprints: Dict[str, str] = {}
+        out = []
+        for run in runs:
+            key = audit.canonical(run.params)
+            if key not in fingerprints:
+                fingerprints[key] = self.analysis_fingerprint(run.params)
+            out.append(self.run_meta(run, fingerprint=fingerprints[key]))
+        return out
+
+    def get_run(self, run_id: str) -> Dict[str, Any]:
+        run = self._require(AnalysisRun, run_id, "Analysis run")
+        return {**run.report, "run": self.run_meta(run)}
+
+    def label_run(self, run_id: str, label: Optional[str]) -> AnalysisRun:
+        """Names a run, e.g. the figures presented at a board meeting."""
+        run = self._require(AnalysisRun, run_id, "Analysis run")
+        old, run.label = run.label, (label or "").strip()[:200] or None
+        run.updated_at = _now()
+        self.repo.save(run)
+        self._audit("LABEL", run.kind, run.id, f"run #{run.number}", changes={"label": [old, run.label]})
+        return run
+
+    def reproduce_run(self, run_id: str) -> Dict[str, Any]:
+        """
+        Recalculates a run from the current data and compares it with the
+        stored report. Only meaningful while the run is not stale.
+        """
+        run = self._require(AnalysisRun, run_id, "Analysis run")
+        meta = self.run_meta(run)
+        if meta["stale"]:
+            return {"run": meta, "reproducible": None,
+                    "message": "The data has changed since this run, so it cannot be recalculated from the "
+                               "current data. The stored report is still what was reported at the time."}
+        p = run.params
+        if p["mode"] == "compare":
+            fresh = self.compare_inherent_residual(p.get("n_trials", 10_000), p.get("seed") or 42,
+                                                   p.get("unit_id"), p["engine"])
+        else:
+            fresh = self.simulation_report(p.get("n_trials", 10_000), p.get("seed"), p.get("residual", True),
+                                           p.get("unit_id"), p["engine"])
+        same = audit.sha256(fresh) == audit.sha256(run.report)
+        return {"run": meta, "reproducible": same,
+                "message": "Recalculation gives exactly the stored result." if same else
+                           "Recalculation differs from the stored result (e.g. a different package version)."}
 
     # =====================================================================
     # Overviews for dashboards

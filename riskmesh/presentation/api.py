@@ -300,12 +300,40 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
 
     @api.post("/simulations", tags=["analysis"])
     async def simulate(body: s.SimulationRequest):
-        return svc.simulation_report(**body.model_dump())
+        """One report (residual or inherent). Stored as a run; reused while the data is unchanged."""
+        d = body.model_dump()
+        return svc.run_analysis(mode="single", engine=d["engine"], n_trials=d["n_trials"], seed=d["seed"],
+                                residual=d["residual"], unit_id=d["unit_id"], use_cache=d["cache"],
+                                label=d["label"])
 
     @api.post("/simulations/compare", tags=["analysis"])
     async def compare(n_trials: int = 10_000, seed: int = 42, unit_id: Optional[str] = None,
-                      engine: str = "analytic"):
-        return svc.compare_inherent_residual(n_trials, seed, unit_id, engine)
+                      engine: str = "analytic", cache: bool = True, label: Optional[str] = None):
+        """Inherent vs residual. Stored as a run; reused while the data is unchanged."""
+        if not 100 <= n_trials <= 1_000_000:
+            raise ValidationError("n_trials must be between 100 and 1,000,000.")
+        return svc.run_analysis(mode="compare", engine=engine, n_trials=n_trials, seed=seed, unit_id=unit_id,
+                                use_cache=cache, label=label)
+
+    # -- run register ---------------------------------------------------------
+
+    @api.get("/runs", tags=["analysis"])
+    async def list_runs(limit: int = 100):
+        """Stored analysis runs, newest first, without reports; `stale` = data changed since."""
+        return svc.list_runs(limit)
+
+    @api.get("/runs/{run_id}", tags=["analysis"])
+    async def get_run(run_id: str):
+        return svc.get_run(run_id)
+
+    @api.patch("/runs/{run_id}", tags=["analysis"])
+    async def label_run(run_id: str, body: s.RunLabel):
+        return svc.run_meta(svc.label_run(run_id, body.label))
+
+    @api.post("/runs/{run_id}/reproduce", tags=["analysis"])
+    async def reproduce_run(run_id: str):
+        """Recalculates the run and checks that the result is identical."""
+        return svc.reproduce_run(run_id)
 
     # -- import / export ----------------------------------------------------
 

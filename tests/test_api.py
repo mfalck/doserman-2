@@ -135,3 +135,23 @@ def test_audit_reason_source_and_verify(client):
 
     result = client.get("/api/audit-log/verify").json()
     assert result["ok"] and result["entries"] == 3  # Jane, Bob (import), import summary
+
+
+def test_runs_are_stored_reused_and_labelled(client):
+    bu = client.post("/api/business-units", json={"name": "IT"}).json()
+    client.post("/api/risks", json={"name": "Outage", "business_unit_id": bu["id"],
+                                    "frequency": {"type": "poisson", "rate": 1},
+                                    "impact": {"dist": "fixed", "value": 100}})
+    first = client.post("/api/simulations/compare").json()
+    second = client.post("/api/simulations/compare").json()
+    assert first["run"]["cached"] is False and second["run"]["cached"] is True
+    fresh = client.post("/api/simulations/compare?cache=false").json()
+    assert fresh["run"]["number"] == 2
+
+    runs = client.get("/api/runs").json()
+    assert [r["number"] for r in runs] == [2, 1] and "report" not in runs[0]
+    labelled = client.patch(f"/api/runs/{runs[1]['id']}", json={"label": "Board"}).json()
+    assert labelled["label"] == "Board"
+    assert client.get(f"/api/runs/{runs[1]['id']}").json()["residual"]["total"]["mean"] > 0
+    assert client.post(f"/api/runs/{runs[0]['id']}/reproduce").json()["reproducible"] is True
+    assert client.get("/api/runs/missing").status_code == 404

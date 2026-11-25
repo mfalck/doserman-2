@@ -159,9 +159,33 @@ class AuditEntry(Entity):
     hash: str = ""
 
 
+@dataclass
+class AnalysisRun(Entity):
+    """
+    A stored analysis result (the run register). `fingerprint` is the SHA-256
+    of everything the result depends on: the risks and units in scope, the
+    engine, its settings and version. While the data is unchanged the stored
+    report is reused instead of recalculated; if the data changes the run
+    becomes "stale" but stays in the register as a record of what was reported.
+    """
+    kind: ClassVar[str] = "analysis_run"
+    number: int                      # 1, 2, 3, ... for referring to runs ("run #17")
+    fingerprint: str
+    mode: str                        # "single" or "compare" (inherent vs residual)
+    engine: str                      # "analytic" or "monte_carlo"
+    params: Dict[str, Any]           # n_trials, seed, residual, unit_id, engine version
+    report: Dict[str, Any]
+    created_by: str = "system"
+    package_version: str = ""
+    audit_seq: int = 0               # audit chain head when the run was made
+    audit_hash: str = ""
+    duration_ms: Optional[float] = None
+    label: Optional[str] = None      # e.g. "Board meeting 2026-12-01"
+
+
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Risk, Control, RiskEvent, ControlEvent)
-ENTITY_TYPES = DATA_TYPES + (AuditEntry,)
+ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun)
 
 # (from type, field, to type, field is a list, graph relationship name)
 REFERENCES = [

@@ -28,6 +28,7 @@ from scipy import stats
 
 Z90 = stats.norm.ppf(0.9)  # ~1.2816
 DEFAULT_PERCENTILES = (50, 90, 95, 99)
+ENGINE_VERSION = "monte_carlo-1"  # bump when results change, so stored runs are not reused
 
 
 # =========================================================================
