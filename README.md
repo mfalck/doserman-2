@@ -1,9 +1,10 @@
 # RiskMesh
 
-Enterprise risk management with quantitative risk analysis (Monte Carlo).
+Open source enterprise risk management with quantitative risk analysis.
 Risks are described by how often they happen and what each event costs; the
-model simulates many years and reports expected annual loss, P90, VaR/TVaR 99
-per risk, per business unit (rolled up through the hierarchy) and in total.
+model computes the distribution of annual losses and reports expected annual
+loss, P90, VaR/TVaR 99 per risk, per business unit (rolled up through the
+hierarchy) and in total.
 
 ## Architecture: three tiers
 
@@ -71,7 +72,22 @@ the browser.
 * **residual_*** (optional): the same after controls. Simulations use them by
   default; `--inherent` / `"residual": false` ignores them.
 
-Risks are simulated as independent of each other.
+Risks are treated as independent of each other.
+
+### Two calculation engines
+
+| | `analytic` (default) | `monte_carlo` |
+|---|---|---|
+| Method | Exact compound distribution via FFT (`riskmesh/domain/analytic.py`) | Simulation of many years |
+| Precision | Grid step reported as `grid_step` (a few thousand on the demo total, finer per risk) | Sampling noise, shrinks with `n_trials` |
+| Repeatability | Always identical | Identical with the same `seed` |
+| Speed (demo) | ~1 s, independent of precision | ~2 s for 1 million years |
+| Limits | Independent risks only; the std of very heavy tails can be a few % low | Needed for correlated risks (planned) |
+
+On the demo data both agree within 0.4% for mean, P50, P90, P99 and TVaR 99
+(Monte Carlo with 1 million years). Choose with `"engine"` in
+`POST /api/simulations`, `engine=` on `/api/simulations/compare`, or
+`riskmesh simulate --engine monte_carlo`.
 
 ### Derived 1-5 scores
 

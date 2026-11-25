@@ -34,7 +34,11 @@ def money(value: float) -> str:
 
 def print_report(report: Dict[str, Any], title: str) -> None:
     t = report["total"]
-    print(f"\n=== {title} ({report['n_trials']:,} simulated years) ===")
+    if report.get("engine") == "analytic":
+        method = f"analytic, grid step {t['grid_step']:,.0f}"
+    else:
+        method = f"Monte Carlo, {report['n_trials']:,} simulated years"
+    print(f"\n=== {title} ({method}) ===")
     print(f"Expected annual loss : {money(t['mean'])}")
     print(f"Median (P50)         : {money(t['p50'])}")
     print(f"P90                  : {money(t['p90'])}")
@@ -74,7 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
     sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
-    sim.add_argument("--trials", type=int, default=50_000)
+    sim.add_argument("--engine", choices=["analytic", "monte_carlo"], default="analytic",
+                     help="analytic: exact via FFT (default); monte_carlo: simulation")
+    sim.add_argument("--trials", type=int, default=50_000, help="Monte Carlo only")
     sim.add_argument("--seed", type=int, default=42)
     sim.add_argument("--inherent", action="store_true", help="ignore controls (residual specs)")
     sim.add_argument("--compare", action="store_true", help="show inherent and residual")
@@ -147,13 +153,14 @@ def run(args, svc: RiskService) -> int:
 
     elif args.command == "simulate":
         if args.compare:
-            result = svc.compare_inherent_residual(args.trials, args.seed)
+            result = svc.compare_inherent_residual(args.trials, args.seed, engine=args.engine)
             print_report(result["inherent"], "Inherent risk")
             print_report(result["residual"], "Residual risk (after controls)")
             print(f"\nControls reduce expected annual loss by {result['reduction_in_expected_loss']:,.0f}"
                   f" and P99 by {result['reduction_in_p99']:,.0f}")
         else:
-            result = svc.simulation_report(args.trials, args.seed, residual=not args.inherent)
+            result = svc.simulation_report(args.trials, args.seed, residual=not args.inherent,
+                                           engine=args.engine)
             print_report(result, "Inherent risk" if args.inherent else "Residual risk")
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
-from ..domain import audit, risk_model
+from ..domain import analytic, audit, risk_model
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REFERENCES, RISK_EVENT_STATUSES,
@@ -619,15 +619,36 @@ class RiskService:
                                          n_trials=n_trials, seed=seed, residual=residual)
 
     def simulation_report(self, n_trials: int = 10_000, seed: Optional[int] = None,
-                          residual: bool = True, unit_id: Optional[str] = None) -> Dict[str, Any]:
-        report = self.simulate(n_trials, seed, residual, unit_id).report()
+                          residual: bool = True, unit_id: Optional[str] = None,
+                          engine: str = "analytic") -> Dict[str, Any]:
+        """
+        Loss-distribution report for all risks (or those under unit_id).
+
+        engine="analytic": exact distributions via FFT (fast, no sampling noise,
+        n_trials/seed are ignored). engine="monte_carlo": simulation, needed once
+        risks are correlated.
+        """
+        if engine == "analytic":
+            risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+            if not risks:
+                raise ValidationError("There are no risks to analyse.")
+            units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
+            try:
+                report = analytic.analyse({r.id: r.to_dict() for r in risks}, units, residual=residual)
+            except ValueError as e:
+                raise ValidationError(f"{e} (try engine='monte_carlo')") from e
+        elif engine == "monte_carlo":
+            report = self.simulate(n_trials, seed, residual, unit_id).report()
+            report["engine"] = "monte_carlo"
+        else:
+            raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
         report["residual"] = residual
         return report
 
     def compare_inherent_residual(self, n_trials: int = 10_000, seed: int = 42,
-                                  unit_id: Optional[str] = None) -> Dict[str, Any]:
-        inherent = self.simulation_report(n_trials, seed, residual=False, unit_id=unit_id)
-        residual = self.simulation_report(n_trials, seed, residual=True, unit_id=unit_id)
+                                  unit_id: Optional[str] = None, engine: str = "analytic") -> Dict[str, Any]:
+        inherent = self.simulation_report(n_trials, seed, residual=False, unit_id=unit_id, engine=engine)
+        residual = self.simulation_report(n_trials, seed, residual=True, unit_id=unit_id, engine=engine)
         return {
             "inherent": inherent,
             "residual": residual,

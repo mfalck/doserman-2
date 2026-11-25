@@ -303,8 +303,9 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         return svc.simulation_report(**body.model_dump())
 
     @api.post("/simulations/compare", tags=["analysis"])
-    async def compare(n_trials: int = 10_000, seed: int = 42, unit_id: Optional[str] = None):
-        return svc.compare_inherent_residual(n_trials, seed, unit_id)
+    async def compare(n_trials: int = 10_000, seed: int = 42, unit_id: Optional[str] = None,
+                      engine: str = "analytic"):
+        return svc.compare_inherent_residual(n_trials, seed, unit_id, engine)
 
     # -- import / export ----------------------------------------------------
 

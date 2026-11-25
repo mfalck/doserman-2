@@ -284,7 +284,9 @@ class AuditEntryOut(_Out):
 # -- Simulation -------------------------------------------------------------
 
 class SimulationRequest(_In):
-    n_trials: int = Field(10_000, ge=100, le=1_000_000)
-    seed: Optional[int] = None
+    engine: Literal["analytic", "monte_carlo"] = Field(
+        "analytic", description="analytic = exact distributions via FFT; monte_carlo = simulation")
+    n_trials: int = Field(10_000, ge=100, le=1_000_000, description="Monte Carlo only")
+    seed: Optional[int] = Field(None, description="Monte Carlo only")
     residual: bool = True
     unit_id: Optional[str] = Field(None, description="Only risks in this unit and its children")
