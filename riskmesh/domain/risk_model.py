@@ -1,5 +1,5 @@
 """
-Quantitative risk model for quantyERM.
+Quantitative risk model for RiskMesh.
 
 A risk is described by two distributions:
 

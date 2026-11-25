@@ -1,14 +1,14 @@
 """
 Command line interface (local presentation tier).
 
-  py -m quanterm demo                     load the example organisation
-  py -m quanterm tree                     show the organisation
-  py -m quanterm risks                    list risks with expected annual loss
-  py -m quanterm simulate [--compare]     Monte Carlo report
-  py -m quanterm export FILE / import FILE
-  py -m quanterm serve [--port 8000]      start the REST API
+  py -m riskmesh demo                     load the example organisation
+  py -m riskmesh tree                     show the organisation
+  py -m riskmesh risks                    list risks with expected annual loss
+  py -m riskmesh simulate [--compare]     Monte Carlo report
+  py -m riskmesh export FILE / import FILE
+  py -m riskmesh serve [--port 8000]      start the REST API
 
-The backend is chosen with QUANTERM_BACKEND or --backend (json, sql, neo4j).
+The backend is chosen with RISKMESH_BACKEND or --backend (json, sql, neo4j).
 """
 
 import argparse
@@ -58,9 +58,9 @@ def print_tree(nodes: List[Dict[str, Any]], indent: int = 0) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="quanterm", description="quantyERM - quantitative risk management")
+    p = argparse.ArgumentParser(prog="riskmesh", description="RiskMesh - quantitative risk management")
     p.add_argument("--backend", choices=["json", "sql", "neo4j", "memory"],
-                   help="overrides QUANTERM_BACKEND")
+                   help="overrides RISKMESH_BACKEND")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -99,8 +99,8 @@ def main(argv=None) -> int:
     if args.command == "serve":
         import os
         import uvicorn
-        os.environ["QUANTERM_BACKEND"] = settings.backend
-        uvicorn.run("quanterm.presentation.api:create_app", factory=True,
+        os.environ["RISKMESH_BACKEND"] = settings.backend
+        uvicorn.run("riskmesh.presentation.api:create_app", factory=True,
                     host=args.host, port=args.port, reload=args.reload)
         return 0
 

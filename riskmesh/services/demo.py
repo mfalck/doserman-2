@@ -1,4 +1,4 @@
-"""Example organisation with quantified risks, used by `quanterm demo`."""
+"""Example organisation with quantified risks, used by `riskmesh demo`."""
 
 from .risk_service import RiskService
 

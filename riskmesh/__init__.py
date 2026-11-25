@@ -1,5 +1,5 @@
 """
-quantyERM - enterprise risk management with quantitative risk analysis.
+RiskMesh - enterprise risk management with quantitative risk analysis.
 
 Three tiers, each depending only on the one below:
 
@@ -10,4 +10,4 @@ Three tiers, each depending only on the one below:
   storage/        Repository interface with JSON, SQL (SQLAlchemy) and Neo4j backends
 """
 
-__version__ = "2.0.0"
+__version__ = "0.1.0"

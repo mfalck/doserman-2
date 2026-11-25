@@ -3,10 +3,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from quanterm.config import Settings
-from quanterm.presentation.api import create_app
-from quanterm.services import RiskService
-from quanterm.storage import MemoryRepository
+from riskmesh.config import Settings
+from riskmesh.presentation.api import create_app
+from riskmesh.services import RiskService
+from riskmesh.storage import MemoryRepository
 
 
 @pytest.fixture

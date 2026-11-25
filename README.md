@@ -1,4 +1,4 @@
-# quantyERM
+# RiskMesh
 
 Enterprise risk management with quantitative risk analysis (Monte Carlo).
 Risks are described by how often they happen and what each event costs; the
@@ -27,12 +27,12 @@ Data can be moved between backends with `export` / `import` (IDs are kept).
 ## Getting started
 
 ```powershell
-py -m pip install -r requirements.txt
-py -m quanterm demo                 # example organisation with 7 risks
-py -m quanterm tree
-py -m quanterm risks
-py -m quanterm simulate --compare   # inherent vs. residual (after controls)
-py -m quanterm serve                # API on http://127.0.0.1:8000/docs
+py -m pip install -e ".[all]"       # or: -r requirements.txt
+py -m riskmesh demo                 # example organisation with 7 risks
+py -m riskmesh tree
+py -m riskmesh risks
+py -m riskmesh simulate --compare   # inherent vs. residual (after controls)
+py -m riskmesh serve                # API on http://127.0.0.1:8000/docs
 py -m pytest                        # tests
 ```
 
@@ -42,12 +42,12 @@ Set environment variables (PowerShell: `$env:NAME = "value"`):
 
 | Variable | Meaning | Default |
 |---|---|---|
-| `QUANTERM_BACKEND` | `json`, `sql`, `neo4j` or `memory` | `json` |
-| `QUANTERM_JSON_PATH` | data file for the JSON backend | `quanterm_data.json` |
-| `QUANTERM_SQL_URL` | SQLAlchemy URL, e.g. `postgresql+psycopg://user:pw@host/db` | `sqlite:///quanterm.db` |
-| `QUANTERM_NEO4J_URI` / `_USER` / `_PASSWORD` / `_DATABASE` | Neo4j connection | `neo4j://localhost:7687`, `neo4j` |
-| `QUANTERM_API_KEY` | if set, API requests need header `X-API-Key` | off |
-| `QUANTERM_CORS_ORIGINS` | comma-separated origins allowed to call the API | none |
+| `RISKMESH_BACKEND` | `json`, `sql`, `neo4j` or `memory` | `json` |
+| `RISKMESH_JSON_PATH` | data file for the JSON backend | `riskmesh_data.json` |
+| `RISKMESH_SQL_URL` | SQLAlchemy URL, e.g. `postgresql+psycopg://user:pw@host/db` | `sqlite:///riskmesh.db` |
+| `RISKMESH_NEO4J_URI` / `_USER` / `_PASSWORD` / `_DATABASE` | Neo4j connection | `neo4j://localhost:7687`, `neo4j` |
+| `RISKMESH_API_KEY` | if set, API requests need header `X-API-Key` | off |
+| `RISKMESH_CORS_ORIGINS` | comma-separated origins allowed to call the API | none |
 
 Credentials live only in the environment of the server, never in code or in
 the browser.
@@ -81,7 +81,7 @@ The qualitative heat-map scores are calculated from the estimates, never typed i
 * **impact** from the median loss of one event: 50k, 250k, 1M, 5M
 * **score** = likelihood x impact (1-25); 16+ Very High, 9+ High, 4+ Medium, 2+ Low
 
-The thresholds are in `ScoringScale` (`quanterm/services/risk_service.py`) and exposed at `GET /api/meta`.
+The thresholds are in `ScoringScale` (`riskmesh/services/risk_service.py`) and exposed at `GET /api/meta`.
 
 ## Other entities
 
@@ -119,14 +119,18 @@ browser. Main endpoints (all under `/api`, full list at `/docs`):
 | Import/Export, Excel upload | `GET /api/export`, `POST /api/import?replace=false` |
 | Form values | `GET /api/meta` |
 
-The front end lives in https://github.com/mfalck/doserman (branch `api-backend`).
+The web front end (Lovable) lives in https://github.com/mfalck/riskmesh-web.
 
 Start the API with the app's origin allowed:
 
 ```powershell
-$env:QUANTERM_CORS_ORIGINS = "https://doserman.lovable.app"
-py -m quanterm serve
+$env:RISKMESH_CORS_ORIGINS = "https://doserman.lovable.app"
+py -m riskmesh serve
 ```
 
 For use by others the API must be hosted somewhere reachable (not localhost)
-and protected (`QUANTERM_API_KEY` as a minimum, real user login later).
+and protected (`RISKMESH_API_KEY` as a minimum, real user login later).
+
+## License
+
+Apache License 2.0 - see [LICENSE](LICENSE) and [NOTICE](NOTICE).

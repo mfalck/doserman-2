@@ -1,7 +1,7 @@
 """
 REST API (presentation tier for web front ends such as the Lovable app).
 
-Run:  py -m quanterm serve            -> http://127.0.0.1:8000/docs
+Run:  py -m riskmesh serve            -> http://127.0.0.1:8000/docs
 
 The browser talks only to this API; database credentials stay on the
 server side. Endpoints are async and therefore handled one at a time,
@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .. import __version__
 from ..config import Settings
 from ..domain import models as m
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
@@ -39,8 +40,8 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
 
     app = FastAPI(
         lifespan=lifespan,
-        title="quantyERM API",
-        version="2.0",
+        title="RiskMesh API",
+        version=__version__,
         description="Enterprise risk management with quantitative (Monte Carlo) risk analysis.",
     )
     if settings.cors_origins:

@@ -3,7 +3,10 @@ __pycache__/
 risk_management_data.json
 risk_simulation_*.json
 risk_data_export_*.json
-quanterm_data.json
-quanterm.db
+riskmesh_data.json
+riskmesh.db
 .pytest_cache/
 .claude/
+*.egg-info/
+build/
+dist/

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from quanterm.domain import risk_model as m
+from riskmesh.domain import risk_model as m
 
 
 @pytest.mark.parametrize("freq, impact", [

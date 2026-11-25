@@ -2,9 +2,9 @@
 
 import pytest
 
-from quanterm.domain.errors import NotFoundError, ValidationError
-from quanterm.domain.models import AuditEntry, ControlEvent, RiskEvent
-from quanterm.services.demo import seed_demo
+from riskmesh.domain.errors import NotFoundError, ValidationError
+from riskmesh.domain.models import AuditEntry, ControlEvent, RiskEvent
+from riskmesh.services.demo import seed_demo
 
 FREQ = {"type": "poisson", "rate": 1.0}
 IMPACT = {"dist": "fixed", "value": 1000}

@@ -53,7 +53,7 @@ TABLES: Dict[Type[Entity], Table] = {cls: _table(cls) for cls in ENTITY_TYPES}
 
 class SqlRepository(Repository):
 
-    def __init__(self, url: str = "sqlite:///quanterm.db", echo: bool = False):
+    def __init__(self, url: str = "sqlite:///riskmesh.db", echo: bool = False):
         self.engine = create_engine(url, echo=echo, future=True)
         metadata.create_all(self.engine)
 

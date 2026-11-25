@@ -1,7 +1,7 @@
 """The Repository contract: every backend must pass these."""
 
-from quanterm.domain.models import Asset, BusinessUnit, Person, Risk
-from quanterm.storage import JsonRepository
+from riskmesh.domain.models import Asset, BusinessUnit, Person, Risk
+from riskmesh.storage import JsonRepository
 
 
 def test_save_get_roundtrip_keeps_all_fields(repo):

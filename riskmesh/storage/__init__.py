@@ -16,7 +16,7 @@ def create_repository(settings) -> Repository:
     if backend == "neo4j":
         from .neo4j_store import Neo4jRepository
         if not settings.neo4j_password:
-            raise RuntimeError("Set QUANTERM_NEO4J_PASSWORD to use the Neo4j backend.")
+            raise RuntimeError("Set RISKMESH_NEO4J_PASSWORD to use the Neo4j backend.")
         return Neo4jRepository(settings.neo4j_uri, settings.neo4j_user,
                                settings.neo4j_password, settings.neo4j_database)
     raise RuntimeError(f"Unknown backend {backend!r} (use json, sql, neo4j or memory)")
