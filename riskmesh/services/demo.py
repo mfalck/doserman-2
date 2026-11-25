@@ -5,7 +5,7 @@ from .risk_service import RiskService
 
 def seed_demo(svc: RiskService) -> None:
     """Replaces all data with the demo organisation."""
-    svc.repo.clear()
+    svc.reset_all()
 
     hq = svc.create_business_unit("Headquarters", "The main office", code="HQ", organization_type="COMPANY")
     finance = svc.create_business_unit("Finance", "Accounting and financial planning", hq.id, code="FIN")

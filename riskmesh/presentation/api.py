@@ -9,6 +9,7 @@ which keeps the file-based backend safe without extra locking.
 """
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote
 
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from .. import __version__
 from ..config import Settings
+from ..domain import audit
 from ..domain import models as m
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..services import RiskService
@@ -67,11 +69,15 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     async def require_api_key(x_api_key: Optional[str] = Header(None),
-                              x_user_id: Optional[str] = Header(None)):
+                              x_user_id: Optional[str] = Header(None),
+                              x_change_reason: Optional[str] = Header(None)):
         if settings.api_key and x_api_key != settings.api_key:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid X-API-Key header")
-        # Informational only until real authentication exists: recorded in the audit log.
-        svc.actor = (x_user_id or "anonymous")[:100]
+        # Audit context for this request. The user is informational until real
+        # authentication exists; the reason explains why a change was made.
+        svc.actor = unquote(x_user_id or "anonymous")[:100] or "anonymous"
+        svc.source = "api"
+        svc.reason = (unquote(x_change_reason)[:500] or None) if x_change_reason else None
 
     # every /api route shares the API-key check
     api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
@@ -277,8 +283,14 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     # -- audit log ----------------------------------------------------------
 
     @api.get("/audit-log", response_model=List[s.AuditEntryOut], tags=["audit"])
-    async def audit_log(limit: int = 1000, entity_type: Optional[str] = None, action: Optional[str] = None):
-        return [a.to_dict() for a in svc.list_audit(limit, entity_type, action)]
+    async def audit_log(limit: int = 1000, entity_type: Optional[str] = None, action: Optional[str] = None,
+                        entity_id: Optional[str] = None):
+        return [a.to_dict() for a in svc.list_audit(limit, entity_type, action, entity_id)]
+
+    @api.get("/audit-log/verify", tags=["audit"])
+    async def verify_audit(check_data: bool = True):
+        """Checks the hash chain and that stored data matches the last audited state."""
+        return svc.verify_audit(check_data)
 
     # -- analysis -----------------------------------------------------------
 
@@ -302,6 +314,8 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
 
     @api.post("/import", tags=["data"])
     async def import_data(data: Dict[str, Any], replace: bool = True):
+        # the audit log records exactly which content was imported
+        svc.source = f"import:sha256:{audit.sha256(data)}"
         return {"imported": svc.import_data(data, replace=replace)}
 
     app.include_router(api)

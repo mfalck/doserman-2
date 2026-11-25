@@ -114,3 +114,24 @@ def test_controls_events_audit_and_meta(client):
 
     meta = client.get("/api/meta").json()
     assert "SUPPLIER" in meta["organization_types"] and meta["scoring"]["impact_bands"]
+
+
+def test_audit_reason_source_and_verify(client):
+    reason = "Årlig gennemgang – ny vurdering"
+    from urllib.parse import quote
+    r = client.post("/api/persons", json={"name": "Jane"},
+                    headers={"X-User-Id": "alice", "X-Change-Reason": quote(reason)})
+    assert r.status_code == 201
+    entry = client.get("/api/audit-log?limit=1").json()[0]
+    assert (entry["user_id"], entry["source"], entry["reason"]) == ("alice", "api", reason)
+    assert entry["seq"] == 1 and entry["hash"] and entry["changes"]["name"] == [None, "Jane"]
+
+    client.post("/api/import?replace=false", json={"persons": [{"id": "p2", "name": "Bob"}]})
+    sources = {e["source"] for e in client.get("/api/audit-log").json()}
+    assert any(src.startswith("import:sha256:") for src in sources)
+
+    history = client.get(f"/api/audit-log?entity_id={r.json()['id']}").json()
+    assert [e["action"] for e in history] == ["CREATE"]
+
+    result = client.get("/api/audit-log/verify").json()
+    assert result["ok"] and result["entries"] == 3  # Jane, Bob (import), import summary

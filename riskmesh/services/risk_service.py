@@ -7,14 +7,16 @@ It depends only on the `Repository` interface, so it works unchanged with
 the JSON, SQL and Neo4j backends, and it knows nothing about HTTP or GUIs.
 """
 
+import copy
 import logging
 import typing
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, Type
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
-from ..domain import risk_model
+from ..domain import audit, risk_model
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REFERENCES, RISK_EVENT_STATUSES,
@@ -45,11 +47,28 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 class RiskService:
 
-    def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system"):
+    def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
+                 source: str = "system"):
         self.repo = repo
         self.scoring = scoring or ScoringScale()
-        self.actor = actor  # who is making changes; recorded in the audit log
+        # Context recorded in the audit log; set per request by the API / per command by the CLI.
+        self.actor = actor
+        self.source = source
+        self.reason: Optional[str] = None
         self._last_audit_ts: Optional[datetime] = None
+        self._head: Optional[Tuple[int, str]] = None  # (seq, hash) of the latest audit entry
+
+    @contextmanager
+    def context(self, actor: Optional[str] = None, source: Optional[str] = None, reason: Optional[str] = None):
+        """Temporarily set who/where/why for the audit log."""
+        saved = (self.actor, self.source, self.reason)
+        self.actor = actor or self.actor
+        self.source = source or self.source
+        self.reason = reason if reason is not None else self.reason
+        try:
+            yield self
+        finally:
+            self.actor, self.source, self.reason = saved
 
     # =====================================================================
     # Generic machinery
@@ -64,22 +83,47 @@ class RiskService:
             raise NotFoundError(f"{label} '{entity_id}' not found.")
         return entity
 
-    def _audit(self, action: str, entity_type: str, entity_id: Optional[str], details: Optional[str] = None):
+    def _chain_head(self) -> Tuple[int, str]:
+        if self._head is None:
+            entries = self.repo.list(AuditEntry)
+            last = max(entries, key=lambda e: e.seq, default=None)
+            self._head = (last.seq, last.hash) if last else (0, audit.GENESIS)
+        return self._head
+
+    def _audit(self, action: str, entity_type: str, entity_id: Optional[str], details: Optional[str] = None,
+               changes: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> AuditEntry:
+        """Appends one entry to the hash chain."""
         # Microsecond timestamps, forced strictly increasing so the log order is exact.
         ts = datetime.now(timezone.utc)
         if self._last_audit_ts and ts <= self._last_audit_ts:
             ts = self._last_audit_ts + timedelta(microseconds=1)
         self._last_audit_ts = ts
-        self.repo.save(AuditEntry(action=action, entity_type=entity_type, entity_id=entity_id,
-                                  details=details, user_id=self.actor,
-                                  timestamp=ts.isoformat(timespec="microseconds")))
+        seq, prev = self._chain_head()
+        entry = AuditEntry(action=action, entity_type=entity_type, entity_id=entity_id, details=details,
+                           user_id=self.actor, timestamp=ts.isoformat(timespec="microseconds"),
+                           seq=seq + 1, source=self.source, reason=self.reason, changes=changes,
+                           state_hash=state, prev_hash=prev)
+        entry.hash = audit.entry_hash(entry)
+        self.repo.save(entry)
+        self._head = (entry.seq, entry.hash)
+        return entry
 
-    def _save(self, entity: Entity, action: str, details: Optional[str] = None) -> None:
-        now = _now()
-        entity.created_at = entity.created_at or now
-        entity.updated_at = now
+    def _save(self, entity: Entity, action: str, before: Optional[Entity] = None,
+              details: Optional[str] = None, stamp: bool = True) -> None:
+        if stamp:
+            now = _now()
+            entity.created_at = entity.created_at or now
+            entity.updated_at = now
         self.repo.save(entity)
-        self._audit(action, entity.kind, entity.id, details or getattr(entity, "name", None))
+        # hash what the backend actually stored, so verify() compares like with like
+        stored = self.repo.get(type(entity), entity.id) or entity
+        self._audit(action, entity.kind, entity.id, details or getattr(entity, "name", None),
+                    changes=audit.diff(before, stored), state=audit.state_hash(stored))
+
+    def _remove(self, entity: Entity, details: Optional[str] = None) -> None:
+        self.repo.delete(type(entity), entity.id)
+        self._audit("DELETE", entity.kind, entity.id, details or getattr(entity, "name", None),
+                    changes=audit.diff(entity, None), state=None)
 
     def _create(self, cls: Type[E], **data: Any) -> E:
         try:
@@ -93,6 +137,7 @@ class RiskService:
 
     def _update(self, cls: Type[E], entity_id: str, changes: Dict[str, Any]) -> E:
         entity = self._require(cls, entity_id)
+        before = copy.deepcopy(entity)
         unknown = set(changes) - (set(cls.field_names()) - {"id", "created_at", "updated_at"})
         if unknown:
             raise ValidationError(f"Unknown fields for {cls.__name__}: {', '.join(sorted(unknown))}")
@@ -100,7 +145,7 @@ class RiskService:
             setattr(entity, key, value)
         self._validate(entity)
         self._check_refs(entity)
-        self._save(entity, "UPDATE", "changed: " + ", ".join(sorted(changes)) if changes else None)
+        self._save(entity, "UPDATE", before)
         return entity
 
     def _delete(self, cls: Type[Entity], entity_id: str) -> None:
@@ -115,17 +160,87 @@ class RiskService:
                 continue
             for ref in self.repo.list(src):
                 value = getattr(ref, field_name)
+                before = copy.deepcopy(ref)
                 if is_list and entity_id in value:
                     setattr(ref, field_name, [v for v in value if v != entity_id])
-                    self._save(ref, "UPDATE", f"removed reference to deleted {cls.kind} {entity_id}")
+                    self._save(ref, "UPDATE", before, f"removed reference to deleted {cls.kind} {entity_id}")
                 elif not is_list and value == entity_id:
                     if _is_optional(src, field_name):
                         setattr(ref, field_name, None)
-                        self._save(ref, "UPDATE", f"cleared {field_name} (deleted {cls.kind})")
+                        self._save(ref, "UPDATE", before, f"cleared {field_name} (deleted {cls.kind})")
                     else:
                         self._delete(src, ref.id)
-        self.repo.delete(cls, entity_id)
-        self._audit("DELETE", cls.kind, entity_id, getattr(entity, "name", None))
+        self._remove(entity)
+
+    def reset_all(self) -> None:
+        """Deletes ALL data including the audit log (demo/testing). The chain starts again."""
+        self.repo.clear()
+        self._head = None
+        self._last_audit_ts = None
+
+    # =====================================================================
+    # Audit verification
+    # =====================================================================
+
+    def verify_audit(self, check_data: bool = True) -> Dict[str, Any]:
+        """
+        Checks that the audit chain is intact and (optionally) that the stored
+        data matches the last audited state of every entity.
+
+        Detects: altered entries, removed or inserted entries, reordering, and
+        data changed or deleted outside RiskMesh. It cannot detect removal of
+        the newest entries unless the returned head hash is kept somewhere else
+        and compared later ("anchoring").
+        """
+        entries = sorted(self.repo.list(AuditEntry), key=lambda e: e.seq)
+        chain_errors: List[Dict[str, Any]] = []
+        prev = audit.GENESIS
+        for expected_seq, e in enumerate(entries, start=1):
+            if e.seq != expected_seq:
+                chain_errors.append({"seq": e.seq,
+                                     "error": f"expected entry {expected_seq}: entries missing or inserted"})
+            if e.prev_hash != prev:
+                chain_errors.append({"seq": e.seq, "error": "prev_hash does not match the previous entry"})
+            if audit.entry_hash(e) != e.hash:
+                chain_errors.append({"seq": e.seq, "error": "entry content was altered (hash mismatch)"})
+            prev = e.hash
+
+        data_errors: List[Dict[str, Any]] = []
+        if check_data:
+            latest: Dict[Tuple[str, str], AuditEntry] = {}
+            for e in entries:
+                if e.entity_id and e.action in ("CREATE", "UPDATE", "DELETE"):
+                    latest[(e.entity_type, e.entity_id)] = e
+            seen = set()
+            for cls in DATA_TYPES:
+                for entity in self.repo.list(cls):
+                    key = (cls.kind, entity.id)
+                    seen.add(key)
+                    last = latest.get(key)
+                    if last is None:
+                        error = "not in the audit log"
+                    elif last.action == "DELETE":
+                        error = "deleted according to the audit log, but still present"
+                    elif last.state_hash != audit.state_hash(entity):
+                        error = "changed outside RiskMesh (differs from the last audited state)"
+                    else:
+                        continue
+                    data_errors.append({"entity_type": cls.kind, "entity_id": entity.id, "error": error})
+            for key, last in latest.items():
+                if key not in seen and last.action != "DELETE":
+                    data_errors.append({"entity_type": key[0], "entity_id": key[1],
+                                        "error": "missing from the data, but not deleted in the audit log"})
+
+        return {
+            "ok": not chain_errors and not data_errors,
+            "entries": len(entries),
+            "head_seq": entries[-1].seq if entries else 0,
+            "head_hash": entries[-1].hash if entries else audit.GENESIS,
+            "chain_errors": chain_errors,
+            "data_errors": data_errors,
+            "checked_data": check_data,
+            "verified_at": _now(),
+        }
 
     def _check_refs(self, entity: Entity, known_ids: Optional[Dict[type, Set[str]]] = None) -> None:
         """Every referenced ID must exist (in the repo, or in known_ids during import)."""
@@ -480,9 +595,11 @@ class RiskService:
     # =====================================================================
 
     def list_audit(self, limit: int = 1000, entity_type: Optional[str] = None,
-                   action: Optional[str] = None) -> List[AuditEntry]:
-        filters = {k: v for k, v in (("entity_type", entity_type), ("action", action)) if v}
-        entries = sorted(self.repo.list(AuditEntry, **filters), key=lambda a: a.timestamp, reverse=True)
+                   action: Optional[str] = None, entity_id: Optional[str] = None) -> List[AuditEntry]:
+        """Newest first. With entity_id: the full history of one entity."""
+        filters = {k: v for k, v in (("entity_type", entity_type), ("action", action),
+                                     ("entity_id", entity_id)) if v}
+        entries = sorted(self.repo.list(AuditEntry, **filters), key=lambda a: a.seq, reverse=True)
         return entries[:max(1, min(limit, 10_000))]
 
     # =====================================================================
@@ -674,16 +791,23 @@ class RiskService:
             if u.parent_id and u.parent_id in self._descendant_ids(u.id, units):
                 raise ValidationError(f"Business unit '{u.name}' is placed below itself.")
 
-        if replace:
-            for cls in DATA_TYPES:  # keep the audit log
+        # Write phase: one audit entry per entity that actually changes.
+        incoming = {cls: {e.id for e in items} for cls, items in batch.items()}
+        if replace:  # remove what is not in the file (the audit log itself is kept)
+            for cls in reversed(DATA_TYPES):
                 for e in self.repo.list(cls):
-                    self.repo.delete(cls, e.id)
+                    if e.id not in incoming[cls]:
+                        self._remove(e, "removed by import (replace)")
         now = _now()
         for cls in DATA_TYPES:
             for entity in batch[cls]:
-                entity.created_at = entity.created_at or now
+                existing = self.repo.get(cls, entity.id)
+                entity.created_at = entity.created_at or (existing.created_at if existing else None) or now
                 entity.updated_at = entity.updated_at or now
-                self.repo.save(entity)
+                if existing is not None and not audit.diff(existing, entity):
+                    continue  # unchanged
+                self._save(entity, "UPDATE" if existing else "CREATE", existing,
+                           f"imported: {getattr(entity, 'name', entity.id)}", stamp=False)
         counts = {cls.kind: len(items) for cls, items in batch.items()}
         self._audit("IMPORT", "data", None,
                     ("replace " if replace else "merge ") + ", ".join(f"{v} {k}" for k, v in counts.items() if v))

@@ -134,7 +134,15 @@ class ControlEvent(Entity):
 
 @dataclass
 class AuditEntry(Entity):
-    """Written by the service on every change; not part of export/import."""
+    """
+    One link in the tamper-evident audit chain. Written by the service on every
+    change; never updated or deleted, and not part of export/import.
+
+    hash = SHA-256 over all other fields (canonical JSON), including prev_hash,
+    so altering, removing or reordering an entry breaks the chain.
+    state_hash = SHA-256 of the entity after the change (None after DELETE),
+    so data edited outside RiskMesh can be detected.
+    """
     kind: ClassVar[str] = "audit_entry"
     action: str  # CREATE, UPDATE, DELETE, IMPORT
     entity_type: str
@@ -142,6 +150,13 @@ class AuditEntry(Entity):
     details: Optional[str] = None
     user_id: str = "system"
     timestamp: str = ""
+    seq: int = 0                                  # 1, 2, 3, ... without gaps
+    source: str = "system"                        # api, cli, import:sha256:<...>, system
+    reason: Optional[str] = None                  # why the change was made
+    changes: Optional[Dict[str, Any]] = None      # {field: [before, after]}
+    state_hash: Optional[str] = None
+    prev_hash: str = ""
+    hash: str = ""
 
 
 # Data entities in dependency order (referenced types first)

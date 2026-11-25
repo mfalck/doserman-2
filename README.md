@@ -93,13 +93,46 @@ The thresholds are in `ScoringScale` (`riskmesh/services/risk_service.py`) and e
   the latest completed test of each control.
 * **Risk events** (`/api/risk-events`): incidents, near misses and audit findings
   with the actual financial impact.
-* **Audit log** (`/api/audit-log`): written by the service on every create,
-  update, delete and import. The `X-User-Id` header is recorded as the user
-  (informational until real authentication exists).
+* **Audit log** (`/api/audit-log`): see below.
 
 Deleting keeps the data consistent: deleting a unit removes its assets, risks,
 controls and events; deleting a risk removes its events and unlinks it from
 controls; deleting a person clears the roles they held.
+
+## Audit trail (tamper-evident)
+
+Every change made through RiskMesh appends one entry per affected entity:
+
+| Field | Meaning |
+|---|---|
+| `seq` | 1, 2, 3, ... without gaps |
+| `user_id` | `X-User-Id` header (API) or `--user` (CLI); informational until real authentication exists |
+| `source` | `api`, `cli`, or `import:<file>:sha256:<hash of the imported content>` |
+| `reason` | why: `X-Change-Reason` header (URL-encoded) or `--reason` |
+| `changes` | field-level `{field: [before, after]}` |
+| `state_hash` | SHA-256 of the entity after the change |
+| `prev_hash`, `hash` | SHA-256 chain: each entry's hash covers all its fields and the previous hash |
+
+`GET /api/audit-log/verify` or `riskmesh audit verify` checks that
+
+* no entry was altered, removed, inserted or reordered (hash chain and `seq`), and
+* the stored data equals the last audited state of every entity, i.e. nothing
+  was changed, added or deleted directly in the database.
+
+With the SQL backend the database refuses `UPDATE` and `DELETE` on the audit
+table (triggers on SQLite; PostgreSQL trigger included but not yet tested).
+The JSON and Neo4j backends cannot block edits, but `verify` detects them.
+
+Limits: removing the *newest* entries cannot be detected from inside the system.
+Keep the head hash returned by `verify` somewhere else (e.g. in minutes or a
+signed e-mail) and compare later; signing/time-stamping the head is planned.
+`riskmesh demo` and `reset_all()` start a new chain.
+
+```powershell
+py -m riskmesh --reason "annual review" import --merge backup.json
+py -m riskmesh audit log --limit 10
+py -m riskmesh audit verify
+```
 
 ## Connecting the Lovable front end
 

@@ -12,7 +12,10 @@ The backend is chosen with RISKMESH_BACKEND or --backend (json, sql, neo4j).
 """
 
 import argparse
+import getpass
+import hashlib
 import json
+import os
 import logging
 import sys
 from typing import Any, Dict, List
@@ -62,6 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--backend", choices=["json", "sql", "neo4j", "memory"],
                    help="overrides RISKMESH_BACKEND")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--reason", help="why you make this change (recorded in the audit log)")
+    p.add_argument("--user", default=getpass.getuser(), help="name recorded in the audit log")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("demo", help="replace all data with the example organisation")
@@ -81,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("file")
     imp.add_argument("--merge", action="store_true", help="keep existing data")
 
+    aud = sub.add_parser("audit", help="show or verify the audit log")
+    aud_sub = aud.add_subparsers(dest="audit_command", required=True)
+    ver = aud_sub.add_parser("verify", help="check the hash chain and the data against it")
+    ver.add_argument("--chain-only", action="store_true", help="do not compare the stored data")
+    log_ = aud_sub.add_parser("log", help="show the newest audit entries")
+    log_.add_argument("--limit", type=int, default=20)
+    log_.add_argument("--entity", help="history of one entity id")
+
     srv = sub.add_parser("serve", help="start the REST API")
     srv.add_argument("--host", default="127.0.0.1")
     srv.add_argument("--port", type=int, default=8000)
@@ -97,7 +110,6 @@ def main(argv=None) -> int:
         settings.backend = args.backend
 
     if args.command == "serve":
-        import os
         import uvicorn
         os.environ["RISKMESH_BACKEND"] = settings.backend
         uvicorn.run("riskmesh.presentation.api:create_app", factory=True,
@@ -106,7 +118,8 @@ def main(argv=None) -> int:
 
     try:
         with create_repository(settings) as repo:
-            svc = RiskService(repo)
+            svc = RiskService(repo, actor=args.user, source="cli")
+            svc.reason = args.reason
             return run(args, svc)
     except DomainError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -153,8 +166,28 @@ def run(args, svc: RiskService) -> int:
         print(f"Exported to {args.file}")
 
     elif args.command == "import":
-        with open(args.file, "r", encoding="utf-8") as f:
-            counts = svc.import_data(json.load(f), replace=not args.merge)
+        with open(args.file, "rb") as f:
+            raw = f.read()
+        svc.source = f"import:{os.path.basename(args.file)}:sha256:{hashlib.sha256(raw).hexdigest()}"
+        counts = svc.import_data(json.loads(raw.decode("utf-8")), replace=not args.merge)
         print("Imported:", ", ".join(f"{v} {k}" for k, v in counts.items()))
+
+    elif args.command == "audit" and args.audit_command == "verify":
+        result = svc.verify_audit(check_data=not args.chain_only)
+        print(f"Entries: {result['entries']}   head: #{result['head_seq']} {result['head_hash']}")
+        for err in result["chain_errors"]:
+            print(f"  CHAIN  #{err['seq']}: {err['error']}")
+        for err in result["data_errors"]:
+            print(f"  DATA   {err['entity_type']} {err['entity_id']}: {err['error']}")
+        print("OK - audit log intact" if result["ok"] else "FAILED - see errors above")
+        return 0 if result["ok"] else 2
+
+    elif args.command == "audit" and args.audit_command == "log":
+        for e in svc.list_audit(args.limit, entity_id=args.entity):
+            print(f"#{e.seq:<5} {e.timestamp[:19]}  {e.user_id:<12} {e.action:<7} {e.entity_type:<13} "
+                  f"{(e.details or '')[:30]:<30} [{e.source}]" + (f"  reason: {e.reason}" if e.reason else ""))
+            for field, (old, new) in (e.changes or {}).items():
+                if e.action == "UPDATE":
+                    print(f"         {field}: {json.dumps(old)} -> {json.dumps(new)}")
 
     return 0

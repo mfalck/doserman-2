@@ -266,12 +266,19 @@ class ControlEventOut(_Out):
 # -- Audit ------------------------------------------------------------------
 
 class AuditEntryOut(_Out):
+    seq: int
     action: str
     entity_type: str
     entity_id: Optional[str] = None
     details: Optional[str] = None
     user_id: str
     timestamp: str
+    source: str
+    reason: Optional[str] = None
+    changes: Optional[Dict[str, Any]] = Field(None, description="{field: [before, after]}")
+    state_hash: Optional[str] = None
+    prev_hash: str
+    hash: str
 
 
 # -- Simulation -------------------------------------------------------------

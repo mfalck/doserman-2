@@ -69,7 +69,7 @@ def test_audit_trail_records_changes_and_actor(setup):
     svc.update_risk(risk.id, category="it")
     latest = svc.list_audit(limit=1)[0]
     assert (latest.action, latest.entity_type, latest.entity_id, latest.user_id) == ("UPDATE", "risk", risk.id, "alice")
-    assert "category" in latest.details
+    assert latest.changes == {"category": [None, "it"]}
     assert {a.action for a in svc.repo.list(AuditEntry)} >= {"CREATE", "UPDATE"}
 
 
