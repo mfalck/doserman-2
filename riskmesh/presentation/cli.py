@@ -12,20 +12,20 @@ The backend is chosen with RISKMESH_BACKEND or --backend (json, sql, neo4j).
 """
 
 import argparse
-import getpass
 import hashlib
 import json
 import os
+from pathlib import Path
 import logging
 import sys
 from typing import Any, Dict, List
 
-from ..config import Settings
+from ..bootstrap import make_service
+from ..config import FILE_NAME, load_settings, user_config_dir, write_template
 from ..domain import risk_model
 from ..domain.errors import DomainError, NotFoundError
 from ..services import RiskService
 from ..services.demo import seed_demo
-from ..storage import create_repository
 
 
 def money(value: float) -> str:
@@ -77,11 +77,12 @@ def _resolve_run(svc: RiskService, ref: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="riskmesh", description="RiskMesh - quantitative risk management")
+    p.add_argument("--config", metavar="FILE", help="riskmesh.toml to use (default: see `riskmesh config path`)")
     p.add_argument("--backend", choices=["json", "sql", "neo4j", "memory"],
-                   help="overrides RISKMESH_BACKEND")
+                   help="overrides the configured backend")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--reason", help="why you make this change (recorded in the audit log)")
-    p.add_argument("--user", default=getpass.getuser(), help="name recorded in the audit log")
+    p.add_argument("--user", help="name recorded in the audit log (default: [user] name or login name)")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("demo", help="replace all data with the example organisation")
@@ -89,10 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
     sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
-    sim.add_argument("--engine", choices=["analytic", "monte_carlo"], default="analytic",
-                     help="analytic: exact via FFT (default); monte_carlo: simulation")
-    sim.add_argument("--trials", type=int, default=50_000, help="Monte Carlo only")
-    sim.add_argument("--seed", type=int, default=42)
+    sim.add_argument("--engine", choices=["analytic", "monte_carlo"],
+                     help="analytic: exact via FFT; monte_carlo: simulation (default: from config)")
+    sim.add_argument("--trials", type=int, help="Monte Carlo only (default: from config)")
+    sim.add_argument("--seed", type=int, help="Monte Carlo only (default: from config)")
     sim.add_argument("--inherent", action="store_true", help="ignore controls (residual specs)")
     sim.add_argument("--compare", action="store_true", help="show inherent and residual")
     sim.add_argument("--json", metavar="FILE", help="also write the full report to FILE")
@@ -124,9 +125,20 @@ def build_parser() -> argparse.ArgumentParser:
     log_.add_argument("--entity", help="history of one entity id")
 
     srv = sub.add_parser("serve", help="start the REST API")
-    srv.add_argument("--host", default="127.0.0.1")
-    srv.add_argument("--port", type=int, default=8000)
+    srv.add_argument("--host", help="default: [api] host")
+    srv.add_argument("--port", type=int, help="default: [api] port")
     srv.add_argument("--reload", action="store_true")
+
+    sub.add_parser("gui", help="start the desktop application")
+
+    cfg = sub.add_parser("config", help="create or show the configuration file")
+    cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
+    init = cfg_sub.add_parser("init", help="write a commented riskmesh.toml")
+    init.add_argument("path", nargs="?", help="where to write it (default: ./riskmesh.toml)")
+    init.add_argument("--user-dir", action="store_true", help="write it to your user config folder")
+    init.add_argument("--force", action="store_true", help="overwrite an existing file")
+    cfg_sub.add_parser("show", help="print the effective settings (secrets masked)")
+    cfg_sub.add_parser("path", help="print which configuration file is used")
     return p
 
 
@@ -134,20 +146,55 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    settings = Settings()
-    if args.backend:
-        settings.backend = args.backend
-
-    if args.command == "serve":
-        import uvicorn
-        os.environ["RISKMESH_BACKEND"] = settings.backend
-        uvicorn.run("riskmesh.presentation.api:create_app", factory=True,
-                    host=args.host, port=args.port, reload=args.reload)
+    if args.command == "config" and args.config_command == "init":
+        target = Path(args.path) if args.path else (
+            user_config_dir() / FILE_NAME if args.user_dir else Path.cwd() / FILE_NAME)
+        try:
+            print(f"Wrote {write_template(target, overwrite=args.force)}")
+        except FileExistsError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
         return 0
 
     try:
-        with create_repository(settings) as repo:
-            svc = RiskService(repo, actor=args.user, source="cli")
+        settings = load_settings(args.config)
+    except (OSError, ValueError) as e:
+        print(f"Configuration error: {e}", file=sys.stderr)
+        return 1
+    if args.backend:
+        settings.backend = args.backend
+
+    if args.command == "config":
+        if args.config_command == "path":
+            print(settings.config_file or "No configuration file found; using defaults and environment variables.")
+        else:
+            print(f"# file: {settings.config_file or '(none - defaults)'}")
+            for key, value in settings.public().items():
+                if key != "config_file":
+                    print(f"{key:<18} = {value}")
+        return 0
+
+    if args.command == "gui":
+        from ..gui import main as gui_main
+        return gui_main(settings)
+
+    if args.command == "serve":
+        import uvicorn
+        if settings.config_file:
+            os.environ["RISKMESH_CONFIG"] = settings.config_file
+        os.environ["RISKMESH_BACKEND"] = settings.backend
+        uvicorn.run("riskmesh.presentation.api:create_app", factory=True,
+                    host=args.host or settings.api_host, port=args.port or settings.api_port, reload=args.reload)
+        return 0
+
+    args.engine = getattr(args, "engine", None) or settings.engine
+    args.trials = getattr(args, "trials", None) or settings.n_trials
+    if getattr(args, "seed", None) is None:
+        args.seed = settings.seed
+
+    try:
+        svc = make_service(settings, actor=args.user, source="cli")
+        with svc.repo:
             svc.reason = args.reason
             return run(args, svc)
     except DomainError as e:

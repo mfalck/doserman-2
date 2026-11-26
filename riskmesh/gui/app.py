@@ -1,0 +1,166 @@
+"""Main window of the RiskMesh desktop application."""
+
+import hashlib
+import json
+import os
+from typing import Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QFont
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox,
+                               QStackedWidget, QWidget)
+
+from .. import __version__
+from ..bootstrap import make_service
+from ..config import Settings, load_settings
+from ..services.demo import seed_demo
+from .pages import AnalysisPage, AuditPage, ControlsPage, DashboardPage, OrganisationPage, RisksPage
+from .widgets import guarded
+
+
+class MainWindow(QMainWindow):
+    PAGES = ["Overview", "Organisation", "Risks", "Controls", "Analysis", "Audit log"]
+
+    def __init__(self, settings: Settings):
+        super().__init__()
+        self.settings = settings
+        self.svc = make_service(settings, source="gui")
+        self.setWindowTitle(f"RiskMesh {__version__}")
+        self.resize(1280, 820)
+
+        central = QWidget()
+        layout = QHBoxLayout(central)
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(170)
+        font = QFont()
+        font.setPointSize(11)
+        self.nav.setFont(font)
+        self.nav.addItems(self.PAGES)
+        self.nav.setStyleSheet("QListWidget { border: none; background: #f8fafc; } "
+                               "QListWidget::item { padding: 8px; } "
+                               "QListWidget::item:selected { background: #dbeafe; color: black; }")
+        self.stack = QStackedWidget()
+        defaults = {"engine": settings.engine, "n_trials": settings.n_trials, "seed": settings.seed}
+        self.pages = [DashboardPage(self.svc, self.refresh_all), OrganisationPage(self.svc, self.refresh_all),
+                      RisksPage(self.svc, self.refresh_all), ControlsPage(self.svc, self.refresh_all),
+                      AnalysisPage(self.svc, self.refresh_all, defaults), AuditPage(self.svc, self.refresh_all)]
+        for p in self.pages:
+            self.stack.addWidget(p)
+        layout.addWidget(self.nav)
+        layout.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+        self.nav.currentRowChanged.connect(self._show_page)
+        self._build_menu()
+        self._build_status()
+        self.nav.setCurrentRow(0)
+
+    # -- navigation / refresh ------------------------------------------------
+
+    def _show_page(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+        guarded(self, self.pages[index].refresh)
+
+    def refresh_all(self) -> None:
+        """After a change: refresh the visible page now; others refresh when opened."""
+        guarded(self, self.stack.currentWidget().refresh)
+
+    # -- menus ---------------------------------------------------------------------
+
+    def _build_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+        for text, slot, shortcut in (("Import data (JSON)…", self.import_json, "Ctrl+I"),
+                                     ("Export data (JSON)…", self.export_json, "Ctrl+E"),
+                                     (None, None, None),
+                                     ("Load demo data…", self.load_demo, None),
+                                     (None, None, None),
+                                     ("Open configuration file…", self.open_config, None),
+                                     ("Show configuration", self.show_config, None),
+                                     (None, None, None),
+                                     ("Exit", self.close, "Ctrl+Q")):
+            if text is None:
+                file_menu.addSeparator()
+                continue
+            action = QAction(text, self)
+            action.triggered.connect(slot)
+            if shortcut:
+                action.setShortcut(shortcut)
+            file_menu.addAction(action)
+        help_menu = self.menuBar().addMenu("&Help")
+        about = QAction("About RiskMesh", self)
+        about.triggered.connect(lambda: QMessageBox.about(
+            self, "RiskMesh", f"<b>RiskMesh {__version__}</b><br>Open source quantitative enterprise risk "
+            "management.<br>Apache License 2.0<br><a href='https://github.com/mfalck/riskmesh'>"
+            "github.com/mfalck/riskmesh</a>"))
+        help_menu.addAction(about)
+
+    def _build_status(self) -> None:
+        s = self.settings
+        where = s.json_path if s.backend == "json" else s.sql_url if s.backend == "sql" else \
+            s.neo4j_uri if s.backend == "neo4j" else "in memory (not saved)"
+        cfg = os.path.basename(s.config_file) if s.config_file else "no config file (defaults)"
+        label = QLabel(f"Backend: <b>{s.backend}</b> – {where} &nbsp;|&nbsp; Config: {cfg} &nbsp;|&nbsp; "
+                       f"User: <b>{self.svc.actor}</b>")
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.statusBar().addWidget(label)
+
+    # -- actions -------------------------------------------------------------------
+
+    def import_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import RiskMesh data", "", "JSON (*.json)")
+        if not path:
+            return
+        replace = QMessageBox.question(
+            self, "Import", "Replace ALL existing data with the file?\n\nYes = replace, No = merge by id",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.No)
+        if replace == QMessageBox.Cancel:
+            return
+
+        def do_import():
+            raw = open(path, "rb").read()
+            source = f"import:{os.path.basename(path)}:sha256:{hashlib.sha256(raw).hexdigest()}"
+            with self.svc.context(source=source):
+                return self.svc.import_data(json.loads(raw.decode("utf-8")), replace=replace == QMessageBox.Yes)
+        counts = guarded(self, do_import)
+        if counts:
+            QMessageBox.information(self, "Import", "Imported: " + ", ".join(f"{v} {k}" for k, v in counts.items()))
+            self.refresh_all()
+
+    def export_json(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export RiskMesh data", "riskmesh-export.json", "JSON (*.json)")
+        if path:
+            def do_export():
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(self.svc.export_data(), f, indent=2, ensure_ascii=False)
+                return True
+            if guarded(self, do_export):
+                self.statusBar().showMessage(f"Exported to {path}", 5000)
+
+    def load_demo(self) -> None:
+        if QMessageBox.warning(self, "Load demo data", "This deletes ALL data, including the audit log, and loads "
+                               "the example organisation. Continue?",
+                               QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            guarded(self, lambda: seed_demo(self.svc))
+            self.refresh_all()
+
+    def open_config(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open riskmesh.toml", "", "RiskMesh config (*.toml)")
+        if not path:
+            return
+        settings = guarded(self, lambda: load_settings(path))
+        if settings:
+            new = MainWindow(settings)
+            new.show()
+            self._replacement = new  # keep a reference
+            self.close()
+
+    def show_config(self) -> None:
+        lines = [f"<tr><td>{k}</td><td><b>{v}</b></td></tr>" for k, v in self.settings.public().items()]
+        QMessageBox.information(self, "Configuration", "<table>" + "".join(lines) + "</table>")
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self.svc.repo.close()
+        super().closeEvent(event)
+
+
+def create_window(settings: Optional[Settings] = None) -> MainWindow:
+    return MainWindow(settings or load_settings())

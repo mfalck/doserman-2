@@ -11,6 +11,7 @@ hierarchy) and in total.
 ```
 presentation/   REST API (FastAPI) for web front ends, e.g. the Lovable app
                 CLI for local use
+gui/            Desktop application (PySide6/Qt), runs the services in-process
       │  calls
 services/       RiskService: all business rules, validation, cascades,
                 import/export, simulation   (+ domain/: models, risk_model)
@@ -29,7 +30,9 @@ Data can be moved between backends with `export` / `import` (IDs are kept).
 
 ```powershell
 py -m pip install -e ".[all]"       # or: -r requirements.txt
+py -m riskmesh config init          # writes a commented riskmesh.toml in this folder
 py -m riskmesh demo                 # example organisation with 7 risks
+py -m riskmesh gui                  # desktop application
 py -m riskmesh tree
 py -m riskmesh risks
 py -m riskmesh simulate --compare   # inherent vs. residual (after controls)
@@ -37,9 +40,37 @@ py -m riskmesh serve                # API on http://127.0.0.1:8000/docs
 py -m pytest                        # tests
 ```
 
-## Choosing a backend
+## Configuration file and backend
 
-Set environment variables (PowerShell: `$env:NAME = "value"`):
+Settings live in `riskmesh.toml`; `riskmesh config init` writes a commented
+template (`--user-dir` puts it in `%APPDATA%\RiskMesh` / `~/.config/riskmesh`).
+It is looked up in this order: `--config FILE`, `RISKMESH_CONFIG`, the current
+folder, your user config folder. `riskmesh config show` prints what is in effect.
+
+```toml
+[storage]
+backend = "sql"                     # json | sql | neo4j | memory
+sql_url = "sqlite:///riskmesh.db"   # relative paths are relative to this file
+
+[storage.neo4j]
+password_env = "RISKMESH_NEO4J_PASSWORD"   # secrets via environment variables
+
+[api]
+port = 8000
+cors_origins = ["http://localhost:8080"]
+
+[analysis]
+engine = "analytic"                 # or monte_carlo (n_trials, seed)
+
+[scoring]
+likelihood_bands = [0.05, 0.20, 0.50, 0.80]
+impact_bands = [50000, 250000, 1000000, 5000000]
+
+[user]
+name = "Martin"                     # name in the audit log for GUI/CLI changes
+```
+
+Environment variables override the file (PowerShell: `$env:NAME = "value"`):
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -52,6 +83,19 @@ Set environment variables (PowerShell: `$env:NAME = "value"`):
 
 Credentials live only in the environment of the server, never in code or in
 the browser.
+
+## Desktop application
+
+`riskmesh gui` (or `riskmesh-gui`, or `py -m riskmesh.gui --config FILE`) opens
+a desktop window that works directly on the configured backend - no server
+needed. Pages: overview, organisation tree, risks (with a live preview of the
+derived scores while you edit), controls, analysis with run history and loss
+exceedance chart, and the audit log with integrity check. Changes are recorded
+with source `gui`, your configured name and an optional reason. File menu:
+import/export JSON, load demo data, open another configuration file.
+
+Requires `pip install "riskmesh[gui]"` (PySide6). Not yet in the desktop app:
+risk/control events and asset editing (use the web app, CLI or API).
 
 ## Describing a risk
 

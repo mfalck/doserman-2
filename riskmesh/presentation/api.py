@@ -18,12 +18,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .. import __version__
-from ..config import Settings
+from ..bootstrap import make_service
+from ..config import Settings, load_settings
 from ..domain import audit
 from ..domain import models as m
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..services import RiskService
-from ..storage import create_repository
 from . import schemas as s
 
 
@@ -32,8 +32,8 @@ def _changes(model) -> Dict[str, Any]:
 
 
 def create_app(service: Optional[RiskService] = None, settings: Optional[Settings] = None) -> FastAPI:
-    settings = settings or Settings()
-    svc = service or RiskService(create_repository(settings))
+    settings = settings or load_settings()
+    svc = service or make_service(settings, actor="anonymous", source="api")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):

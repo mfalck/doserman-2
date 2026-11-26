@@ -7,6 +7,8 @@ uvicorn[standard]>=0.29
 # storage backends (only needed for the backend you use)
 sqlalchemy>=2.0
 neo4j>=5.0
+# desktop GUI
+PySide6>=6.6
 # tests
 pytest>=8.0
 httpx>=0.27
