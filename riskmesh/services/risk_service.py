@@ -26,6 +26,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
+from .excel import ExcelExchange
 from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
@@ -56,7 +57,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
+class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):

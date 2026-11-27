@@ -76,8 +76,12 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         self.admin_actions = []
+        self.editor_actions = []
         file_menu = self.menuBar().addMenu("&File")
-        for text, slot, shortcut in (("Import data (JSON)…", self.import_json, "Ctrl+I"),
+        for text, slot, shortcut in (("Import from Excel…", self.import_excel, None),
+                                     ("Export to Excel…", self.export_excel, None),
+                                     (None, None, None),
+                                     ("Import data (JSON)…", self.import_json, "Ctrl+I"),
                                      ("Export data (JSON)…", self.export_json, "Ctrl+E"),
                                      (None, None, None),
                                      ("Load demo data…", self.load_demo, None),
@@ -95,6 +99,8 @@ class MainWindow(QMainWindow):
                 action.setShortcut(shortcut)
             if slot in (self.import_json, self.load_demo):
                 self.admin_actions.append(action)
+            if slot == self.import_excel:
+                self.editor_actions.append(action)
             file_menu.addAction(action)
         help_menu = self.menuBar().addMenu("&Help")
         about = QAction("About RiskMesh", self)
@@ -137,6 +143,53 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Import", "Imported: " + ", ".join(f"{v} {k}" for k, v in counts.items()))
             self.refresh_all()
 
+    def export_excel(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Export to Excel", "riskmesh.xlsx", "Excel workbook (*.xlsx)")
+        if path:
+            def do_export():
+                with open(path, "wb") as f:
+                    f.write(self.svc.export_excel())
+                return True
+            if guarded(self, do_export):
+                self.statusBar().showMessage(f"Workbook written to {path}", 5000)
+
+    def import_excel(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import from Excel", "", "Excel workbook (*.xlsx)")
+        if not path:
+            return
+        replace = False
+        if self.role == "admin":
+            answer = QMessageBox.question(
+                self, "Import from Excel", "Delete stored rows that are missing from a sheet (replace)?\n\n"
+                "No = merge: add and update rows, keep everything else.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.No)
+            if answer == QMessageBox.Cancel:
+                return
+            replace = answer == QMessageBox.Yes
+        content = open(path, "rb").read()
+        preview = guarded(self, lambda: self.svc.import_excel(content, replace=replace, dry_run=True))
+        if not preview:
+            return
+        rows = [f"<tr><td>{k.replace('_', ' ')}</td><td align=right>{c['created']}</td>"
+                f"<td align=right>{c['updated']}</td><td align=right>{c['unchanged']}</td>"
+                f"<td align=right>{c['removed']}</td></tr>" for k, c in preview["changes"].items()]
+        total = sum(c["created"] + c["updated"] + c["removed"] for c in preview["changes"].values())
+        table = ("<table cellspacing=6><tr><th align=left>Sheet</th><th>New</th><th>Changed</th><th>Same</th>"
+                 "<th>Removed</th></tr>" + "".join(rows) + "</table>")
+        if not total:
+            QMessageBox.information(self, "Import from Excel", "The workbook matches the stored data." + table)
+            return
+        if QMessageBox.question(self, "Import from Excel", f"Store these {total} changes?" + table) != QMessageBox.Yes:
+            return
+        source = f"excel:{os.path.basename(path)}:sha256:{hashlib.sha256(content).hexdigest()}"
+
+        def do_import():
+            with self.svc.context(source=source):
+                return self.svc.import_excel(content, replace=replace)
+        if guarded(self, do_import):
+            self.statusBar().showMessage("Workbook imported (recorded in the audit log)", 5000)
+            self.refresh_all()
+
     def export_json(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Export RiskMesh data", "riskmesh-export.json", "JSON (*.json)")
         if path:
@@ -163,6 +216,8 @@ class MainWindow(QMainWindow):
                 b.setEnabled(can_edit)
         for action in self.admin_actions:
             action.setEnabled(self.role == "admin")
+        for action in self.editor_actions:
+            action.setEnabled(can_edit)
         for page in self.pages:
             for b in getattr(page, "admin_buttons", []):
                 b.setEnabled(self.role == "admin")

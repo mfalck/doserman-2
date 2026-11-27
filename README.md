@@ -315,6 +315,40 @@ and automatically when a period is closed. `verify` then also reports removed
 newest entries, forged anchors and time stamps for another hash.
 `riskmesh demo` and `reset_all()` start a new chain.
 
+## Excel workbook
+
+All data can be downloaded as one Excel workbook, edited and uploaded again;
+with no data yet the download is an empty template.
+
+* One sheet per kind of data (organisation, people, assets, suppliers,
+  services, customers, risks, controls, risk events, control tests) and a
+  *Read me* sheet that explains the columns.
+* References are names (with drop-down lists); the ID column keeps the link
+  to stored rows, and an ID can be used wherever a name is not unique. Lists
+  are separated by `;`, yes/no columns take yes or no.
+* A frequency is either *events per year* or *chance per year %*; a
+  distribution is a model (`lognormal`, `pert`, `triangular`, `uniform`,
+  `fixed`) and its numbers (low P10 / high P90, min / most likely / max, or
+  fixed). Numbers may be typed as `250000`, `250.000` or `2,5`.
+* Upload checks the whole workbook first and reports every problem with sheet,
+  row and column. A preview shows what would be created, changed or removed
+  before anything is stored; the import itself is recorded in the audit log
+  with the workbook's SHA-256.
+* Merge (default, editors) adds and updates rows and keeps everything else.
+  Replace (administrators) also deletes stored rows that are missing from a
+  sheet. Sheets removed from the workbook are never touched.
+
+```bash
+riskmesh excel export riskmesh.xlsx
+riskmesh excel import riskmesh.xlsx --dry-run     # only show what would change
+riskmesh excel import riskmesh.xlsx               # shows the changes and asks before storing
+```
+
+API: `GET /api/export.xlsx`, `POST /api/import.xlsx?dry_run=true&replace=false`
+with the file as the request body. The desktop application has *Import from
+Excel* and *Export to Excel* in the File menu, the web app an *Excel workbook*
+page.
+
 ## Periods and reporting
 
 Closing a period freezes its figures:

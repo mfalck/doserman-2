@@ -1,6 +1,7 @@
 # core (business logic + JSON backend)
 numpy>=1.26
 scipy>=1.11
+openpyxl>=3.1
 # presentation: REST API
 fastapi>=0.110
 uvicorn[standard]>=0.29

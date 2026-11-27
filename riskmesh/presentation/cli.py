@@ -96,6 +96,32 @@ def _user_by_name(svc: RiskService, username: str):
     return found[0]
 
 
+def _excel(args, svc: RiskService) -> int:
+    import hashlib
+    if args.excel_command == "export":
+        with open(args.file, "wb") as f:
+            f.write(svc.export_excel())
+        print(f"Workbook written to {args.file}")
+        return 0
+    with open(args.file, "rb") as f:
+        content = f.read()
+    preview = svc.import_excel(content, replace=args.replace, dry_run=True)
+    print(f"{'Sheet':<16}{'new':>6}{'changed':>9}{'same':>7}{'removed':>9}")
+    for kind, c in preview["changes"].items():
+        print(f"{kind.replace('_', ' '):<16}{c['created']:>6}{c['updated']:>9}{c['unchanged']:>7}{c['removed']:>9}")
+    total = sum(c["created"] + c["updated"] + c["removed"] for c in preview["changes"].values())
+    if args.dry_run or not total:
+        print("Nothing changed." if not total else "Dry run: nothing stored.")
+        return 0
+    if not args.yes and input(f"Store these {total} changes? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
+        print("Cancelled.")
+        return 1
+    with svc.context(source=f"excel:sha256:{hashlib.sha256(content).hexdigest()}"):
+        svc.import_excel(content, replace=args.replace)
+    print("Stored (recorded in the audit log).")
+    return 0
+
+
 def _find(items, name: str):
     hits = [x for x in items if x.id == name or x.name.lower() == name.lower()]
     return hits[0] if hits else None
@@ -250,6 +276,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("demo", help="replace all data with the example organisation")
+
+    xl = sub.add_parser("excel", help="download or upload all data as an Excel workbook")
+    xl_sub = xl.add_subparsers(dest="excel_command", required=True)
+    xl_sub.add_parser("export", help="write all data (or an empty template) to a workbook").add_argument("file")
+    xli = xl_sub.add_parser("import", help="read a workbook; shows what changes and asks first")
+    xli.add_argument("file")
+    xli.add_argument("--replace", action="store_true", help="delete stored rows that are missing from a sheet")
+    xli.add_argument("--dry-run", action="store_true", help="only show what would change")
+    xli.add_argument("--yes", action="store_true", help="do not ask for confirmation")
 
     tp = sub.add_parser("third-party", help="suppliers, services and customers: concentration and findings")
     tp_sub = tp.add_subparsers(dest="tp_command", required=True)
@@ -506,6 +541,9 @@ def run(args, svc: RiskService) -> int:
 
     elif args.command == "third-party":
         return _third_party(args, svc)
+
+    elif args.command == "excel":
+        return _excel(args, svc)
 
     elif args.command == "runs":
         if args.runs_command == "list":

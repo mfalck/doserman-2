@@ -47,6 +47,7 @@ def _changes(model) -> Dict[str, Any]:
 
 log = logging.getLogger(__name__)
 MAX_FAILED_LOGINS = 5
+MAX_UPLOAD_BYTES = 20_000_000
 LOCKOUT_SECONDS = 60
 
 
@@ -60,6 +61,8 @@ def required_role(method: str, path: str, query: Dict[str, str]) -> str:
         return "admin"
     if path == "/api/import":
         return "editor" if query.get("replace", "true").lower() == "false" else "admin"
+    if path == "/api/import.xlsx":  # merge by default; replacing (deleting rows not in the workbook) is for admins
+        return "admin" if query.get("replace", "false").lower() == "true" else "editor"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "viewer"
     if path in ("/api/simulations", "/api/simulations/compare") or (
@@ -671,6 +674,30 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.get("/export", tags=["data"])
     async def export_data():
         return svc.export_data()
+
+    @api.get("/export.xlsx", tags=["data"])
+    async def export_excel():
+        """All data as an Excel workbook (also the template: edit it and upload it again)."""
+        from datetime import date as _date
+        return Response(svc.export_excel(),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="riskmesh-{_date.today().isoformat()}.xlsx"'})
+
+    @api.post("/import.xlsx", tags=["data"])
+    async def import_excel(request: Request, replace: bool = False, dry_run: bool = False):
+        """
+        Upload a workbook (the request body is the .xlsx file). dry_run=true only checks it and
+        returns what would change. replace=true deletes stored rows that are missing from a sheet.
+        """
+        content = await request.body()
+        if not content:
+            raise ValidationError("Send the .xlsx file as the request body.")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ValidationError(f"The file is larger than {MAX_UPLOAD_BYTES // 1_000_000} MB.")
+        import hashlib
+        svc.source = f"excel:sha256:{hashlib.sha256(content).hexdigest()}"
+        return svc.import_excel(content, replace=replace, dry_run=dry_run)
 
     @api.post("/import", tags=["data"])
     async def import_data(data: Dict[str, Any], replace: bool = True):

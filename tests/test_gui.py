@@ -146,3 +146,16 @@ def test_stress_test_and_outage_fields(window):
     assert values["residual_outage_hours"] == risk.residual_outage_hours
     plain = next(r for r in window.svc.list_risks() if not r.outage_hours)
     assert RiskDialog(window.svc, plain).values()["outage_hours"] is None
+
+
+def test_excel_menu_round_trip(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    path = str(tmp_path / "data.xlsx")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (path, ""))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (path, ""))
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: shown.append(a[2]))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    window.export_excel()
+    window.import_excel()
+    assert shown and "matches the stored data" in shown[-1]
