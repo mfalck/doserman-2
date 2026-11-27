@@ -21,6 +21,7 @@ from urllib.parse import quote, unquote
 
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -281,6 +282,7 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
             "supplier_tiers": m.SUPPLIER_TIERS,
             "service_criticalities": m.SERVICE_CRITICALITIES,
             "regulations": m.REGULATIONS,
+            "incident_statuses": m.INCIDENT_STATUSES,
             "control_types": m.CONTROL_TYPES,
             "implementation_statuses": m.IMPLEMENTATION_STATUSES,
             "risk_event_types": m.RISK_EVENT_TYPES,
@@ -429,6 +431,41 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def delete_supplier(supplier_id: str):
         svc.delete_supplier(supplier_id)
 
+    @api.get("/incidents/overview", tags=["incidents"])
+    async def incident_overview():
+        """Open incidents and every reporting / notification deadline not met yet, soonest first."""
+        return svc.incident_overview()
+
+    @api.get("/incidents", response_model=List[s.IncidentOut], tags=["incidents"])
+    async def list_incidents(open_only: bool = False):
+        return [x.to_dict() for x in svc.list_incidents(open_only)]
+
+    @api.post("/incidents", response_model=s.IncidentOut, status_code=201, tags=["incidents"])
+    async def create_incident(body: s.IncidentCreate):
+        d = body.model_dump()
+        return svc.create_incident(d.pop("title"), d.pop("detected_at"), **d).to_dict()
+
+    @api.get("/incidents/{incident_id}", response_model=s.IncidentOut, tags=["incidents"])
+    async def get_incident(incident_id: str):
+        return svc.get_incident(incident_id).to_dict()
+
+    @api.get("/incidents/{incident_id}/deadlines", tags=["incidents"])
+    async def incident_deadlines(incident_id: str):
+        """What it affects and the deadlines it starts (NIS2 and each affected customer's contract)."""
+        return svc.incident_deadlines(incident_id)
+
+    @api.post("/incidents/{incident_id}/notifications", response_model=s.IncidentOut, tags=["incidents"])
+    async def record_notification(incident_id: str, body: s.NotificationSent):
+        return svc.record_notification(incident_id, body.key, body.sent_at).to_dict()
+
+    @api.patch("/incidents/{incident_id}", response_model=s.IncidentOut, tags=["incidents"])
+    async def update_incident(incident_id: str, body: s.IncidentUpdate):
+        return svc.update_incident(incident_id, **_changes(body)).to_dict()
+
+    @api.delete("/incidents/{incident_id}", status_code=204, tags=["incidents"])
+    async def delete_incident(incident_id: str):
+        svc.delete_incident(incident_id)
+
     @api.get("/correlations", response_model=List[s.CorrelationOut], tags=["portfolio"])
     async def list_correlations(risk_id: Optional[str] = None):
         return [x.to_dict() for x in svc.list_correlations(risk_id)]
@@ -504,6 +541,19 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.get("/customers/{customer_id}", response_model=s.CustomerOut, tags=["third parties"])
     async def get_customer(customer_id: str):
         return svc.get_customer(customer_id).to_dict()
+
+    @api.get("/customers/{customer_id}/dora", tags=["third parties"])
+    async def customer_dora(customer_id: str):
+        """What the customer's DORA register of information needs from us (providers, supply chain, gaps)."""
+        return svc.dora_extract(customer_id)
+
+    @api.get("/customers/{customer_id}/dora.xlsx", tags=["third parties"])
+    async def customer_dora_xlsx(customer_id: str):
+        name = svc.get_customer(customer_id).name
+        safe = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-") or "customer"
+        return Response(svc.export_dora_extract(customer_id),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="dora-{safe}.xlsx"'})
 
     @api.get("/customers/{customer_id}/profile", tags=["third parties"])
     async def customer_profile(customer_id: str):

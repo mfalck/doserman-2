@@ -158,6 +158,28 @@ def _third_party(args, svc: RiskService) -> int:
             h = x["shortest_notification_hours"]
             print(f"{x['name'][:27]:<28}{x['criticality']:<12}{x['supplier_count']:>10}{x['customer_count']:>10}"
                   f"{money(x['contract_value'])}  {'' if h is None else f'{h:g} h'}")
+    elif cmd == "dora":
+        cust = _find(svc.list_customers(), args.customer)
+        if not cust:
+            print(f"Error: no customer called {args.customer!r}", file=sys.stderr)
+            return 1
+        x = svc.dora_extract(cust.id)
+        p = x["provider"]
+        print(f"DORA register information for {cust.name} - provider {p['name']} (LEI {p['lei'] or 'missing'})")
+        print(f"\n{'Rank':<6}{'Provider':<28}{'LEI / company no.':<24}{'Country':<9}Serves")
+        for r in x["supply_chain"]:
+            prov = next((q for q in x["providers"] if q["name"] == r["provider"]), {})
+            ident = r["lei"] or prov.get("company_number") or "-"
+            print(f"{r['rank']:<6}{r['provider'][:27]:<28}{ident:<24}{prov.get('country') or '-':<9}"
+                  f"{r['recipient']}  ({r['service']})")
+        if x["gaps"]:
+            print("\nStill missing:")
+            for gap in x["gaps"]:
+                print(f"  - {gap}")
+        if args.xlsx:
+            with open(args.xlsx, "wb") as f:
+                f.write(svc.export_dora_extract(cust.id))
+            print(f"\nWorkbook written to {args.xlsx}")
     elif cmd == "findings":
         for f in svc.third_party_findings():
             print(f"{f['severity'].upper():<7}{f['entity_type']:<10}{f['name'][:30]:<31}{f['finding']}")
@@ -306,6 +328,9 @@ def build_parser() -> argparse.ArgumentParser:
     tp_sub.add_parser("findings", help="what a NIS2/DORA review would ask about")
     tpe = tp_sub.add_parser("exposure", help="who is hit if a supplier or service fails")
     tpe.add_argument("name", help="supplier or service name (or id)")
+    tpd = tp_sub.add_parser("dora", help="what a DORA customer's register of information needs from us")
+    tpd.add_argument("customer", help="customer name")
+    tpd.add_argument("--xlsx", metavar="FILE", help="also write it as an Excel workbook")
     tpc = tp_sub.add_parser("customer", help="what a customer depends on")
     tpc.add_argument("name", help="customer name (or id)")
     tps = tp_sub.add_parser("stress", help="what an outage of N hours costs (own cost and penalties)")
@@ -313,6 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     tps.add_argument("hours", type=float)
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
+    sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
     sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
@@ -554,6 +580,19 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "incidents":
+        o = svc.incident_overview()
+        if not o["open"]:
+            print("No open incidents.")
+        for i in o["open"]:
+            sig = {True: "NIS2 significant", False: "not significant", None: "NIS2 not assessed"}[i["nis2_significant"]]
+            print(f"{i['detected_at']}  {i['title']}  [{i['status'].lower()}, {sig}, {i['customer_count']} customers]")
+        if o["deadlines"]:
+            print(f"\n{'Due':<18}{'Status':<10}{'Deadline':<40}Incident")
+            for d in o["deadlines"]:
+                print(f"{d['due']:<18}{d['status'].replace('_', ' '):<10}{d['label'][:39]:<40}{d['incident']}")
+        if o["overdue"]:
+            print(f"\n{o['overdue']} deadline(s) overdue.")
     elif args.command == "portfolio":
         names = {r.id: r.name for r in svc.list_risks()}
         units = {u.id: u.name for u in svc.list_business_units()}

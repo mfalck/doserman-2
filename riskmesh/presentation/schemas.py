@@ -36,6 +36,8 @@ class BusinessUnitCreate(_In):
     parent_id: Optional[str] = None
     code: Optional[str] = None
     organization_type: OrgType = "DEPARTMENT"
+    lei: Optional[str] = None
+    country: Optional[str] = None
 
 
 class BusinessUnitUpdate(_In):
@@ -46,6 +48,8 @@ class BusinessUnitUpdate(_In):
     organization_type: Optional[OrgType] = None
     risk_owner_id: Optional[str] = None
     delegate_ids: Optional[List[str]] = None
+    lei: Optional[str] = None
+    country: Optional[str] = None
 
 
 class BusinessUnitOut(_Out):
@@ -56,6 +60,8 @@ class BusinessUnitOut(_Out):
     organization_type: str
     risk_owner_id: Optional[str] = None
     delegate_ids: List[str] = []
+    lei: Optional[str] = None
+    country: Optional[str] = None
 
 
 class RiskOwnerAssign(_In):
@@ -238,6 +244,9 @@ class SupplierCreate(_In):
     certifications: List[str] = []
     exit_plan: bool = False
     subcontractor_ids: List[str] = []
+    lei: Optional[str] = None
+    company_number: Optional[str] = None
+    parent_company: Optional[str] = None
 
 
 class SupplierUpdate(_In):
@@ -254,6 +263,9 @@ class SupplierUpdate(_In):
     certifications: Optional[List[str]] = None
     exit_plan: Optional[bool] = None
     subcontractor_ids: Optional[List[str]] = None
+    lei: Optional[str] = None
+    company_number: Optional[str] = None
+    parent_company: Optional[str] = None
 
 
 class SupplierOut(_Out):
@@ -270,6 +282,65 @@ class SupplierOut(_Out):
     certifications: List[str] = []
     exit_plan: bool = False
     subcontractor_ids: List[str] = []
+    lei: Optional[str] = None
+    company_number: Optional[str] = None
+    parent_company: Optional[str] = None
+
+
+IncidentStatus = Literal["OPEN", "CONTAINED", "RESOLVED", "CLOSED"]
+
+
+class IncidentCreate(_In):
+    title: str
+    detected_at: str = Field(..., description="When we became aware, local time YYYY-MM-DDTHH:MM")
+    status: IncidentStatus = "OPEN"
+    description: Optional[str] = None
+    service_ids: List[str] = []
+    supplier_ids: List[str] = []
+    risk_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    nis2_significant: Optional[bool] = None
+    resolved_at: Optional[str] = None
+    root_cause: Optional[str] = None
+    financial_impact: Optional[float] = Field(None, ge=0)
+    notifications: Dict[str, str] = {}
+
+
+class IncidentUpdate(_In):
+    title: Optional[str] = None
+    detected_at: Optional[str] = None
+    status: Optional[IncidentStatus] = None
+    description: Optional[str] = None
+    service_ids: Optional[List[str]] = None
+    supplier_ids: Optional[List[str]] = None
+    risk_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    nis2_significant: Optional[bool] = None
+    resolved_at: Optional[str] = None
+    root_cause: Optional[str] = None
+    financial_impact: Optional[float] = Field(None, ge=0)
+    notifications: Optional[Dict[str, str]] = None
+
+
+class IncidentOut(_Out):
+    title: str
+    detected_at: str
+    status: str
+    description: Optional[str] = None
+    service_ids: List[str] = []
+    supplier_ids: List[str] = []
+    risk_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    nis2_significant: Optional[bool] = None
+    resolved_at: Optional[str] = None
+    root_cause: Optional[str] = None
+    financial_impact: Optional[float] = None
+    notifications: Dict[str, str] = {}
+
+
+class NotificationSent(_In):
+    key: str = Field(..., description="e.g. nis2:early_warning or customer:<id>")
+    sent_at: Optional[str] = Field(None, description="default now; empty string undoes it")
 
 
 class CorrelationCreate(_In):
@@ -333,6 +404,8 @@ class ServiceCreate(_In):
     rto_hours: Optional[float] = Field(None, ge=0)
     rpo_hours: Optional[float] = Field(None, ge=0)
     outage_cost_per_hour: Optional[float] = Field(None, ge=0)
+    ict_service_type: Optional[str] = None
+    data_locations: List[str] = []
 
 
 class ServiceUpdate(_In):
@@ -346,6 +419,8 @@ class ServiceUpdate(_In):
     rto_hours: Optional[float] = Field(None, ge=0)
     rpo_hours: Optional[float] = Field(None, ge=0)
     outage_cost_per_hour: Optional[float] = Field(None, ge=0)
+    ict_service_type: Optional[str] = None
+    data_locations: Optional[List[str]] = None
 
 
 class ServiceOut(_Out):
@@ -359,6 +434,8 @@ class ServiceOut(_Out):
     rto_hours: Optional[float] = None
     rpo_hours: Optional[float] = None
     outage_cost_per_hour: Optional[float] = None
+    ict_service_type: Optional[str] = None
+    data_locations: List[str] = []
 
 
 class CustomerCreate(_In):

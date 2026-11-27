@@ -20,6 +20,7 @@ SERVICE_CRITICALITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 SUPPLIER_TIERS = ("CRITICAL", "IMPORTANT", "STANDARD")
 # regimes a customer is subject to; they decide what the customer will ask of us
 REGULATIONS = ("NIS2_ESSENTIAL", "NIS2_IMPORTANT", "DORA", "CER", "GDPR", "OTHER")
+INCIDENT_STATUSES = ("OPEN", "CONTAINED", "RESOLVED", "CLOSED")
 
 
 def new_id() -> str:
@@ -67,6 +68,9 @@ class BusinessUnit(Entity):
     organization_type: str = "DEPARTMENT"
     risk_owner_id: Optional[str] = None
     delegate_ids: List[str] = field(default_factory=list)
+    # for a legal entity (the top company): what customers' DORA registers ask about us
+    lei: Optional[str] = None                    # Legal Entity Identifier, 20 characters
+    country: Optional[str] = None                # ISO country code, e.g. "DK"
 
 
 @dataclass
@@ -136,6 +140,9 @@ class Supplier(Entity):
     certifications: List[str] = field(default_factory=list)   # e.g. ["ISO 27001", "ISAE 3402"]
     exit_plan: bool = False
     subcontractor_ids: List[str] = field(default_factory=list)
+    lei: Optional[str] = None                    # Legal Entity Identifier (DORA register of information)
+    company_number: Optional[str] = None         # national registration number, e.g. CVR
+    parent_company: Optional[str] = None         # ultimate parent, if part of a group
 
 
 @dataclass
@@ -152,6 +159,8 @@ class Service(Entity):
     rto_hours: Optional[float] = None            # recovery time objective
     rpo_hours: Optional[float] = None            # recovery point objective
     outage_cost_per_hour: Optional[float] = None  # our own cost while it is down (staff, recovery, lost sales)
+    ict_service_type: Optional[str] = None       # e.g. "Cloud hosting (IaaS)", as customers' DORA registers ask
+    data_locations: List[str] = field(default_factory=list)   # where its data is stored and processed
 
 
 @dataclass
@@ -178,6 +187,31 @@ class Customer(Entity):
     penalty_per_hour: Optional[float] = None
     penalty_grace_hours: Optional[float] = None
     penalty_cap: Optional[float] = None          # per event
+
+
+@dataclass
+class Incident(Entity):
+    """
+    An incident as it happens: when we became aware of it, what it hits, and
+    whom we have told. The deadlines (NIS2 reporting, each affected customer's
+    contractual notification) are derived, never stored; `notifications`
+    records when each was met: {"nis2:early_warning": "2026-11-27T14:05", ...}.
+    Times are local, "YYYY-MM-DDTHH:MM".
+    """
+    kind: ClassVar[str] = "incident"
+    title: str
+    detected_at: str
+    status: str = "OPEN"
+    description: Optional[str] = None
+    service_ids: List[str] = field(default_factory=list)     # services affected
+    supplier_ids: List[str] = field(default_factory=list)    # suppliers where it started
+    risk_id: Optional[str] = None                            # the risk that materialised
+    owner_id: Optional[str] = None
+    nis2_significant: Optional[bool] = None                  # None = not yet assessed
+    resolved_at: Optional[str] = None
+    root_cause: Optional[str] = None
+    financial_impact: Optional[float] = None
+    notifications: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -411,7 +445,7 @@ class PeriodFact(Entity):
 
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Correlation, Appetite, Control,
-              RiskEvent, ControlEvent)
+              RiskEvent, ControlEvent, Incident)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
 VERIFIED_TYPES = DATA_TYPES + (User, ReportingPeriod)
@@ -444,4 +478,8 @@ REFERENCES = [
     (Correlation, "risk_b_id", Risk, False, "CORRELATES"),
     (Appetite, "business_unit_id", BusinessUnit, False, "APPLIES_TO"),
     (Appetite, "owner_id", Person, False, "OWNED_BY"),
+    (Incident, "service_ids", Service, True, "AFFECTED"),
+    (Incident, "supplier_ids", Supplier, True, "STARTED_AT"),
+    (Incident, "risk_id", Risk, False, "MATERIALISED"),
+    (Incident, "owner_id", Person, False, "HANDLED_BY"),
 ]

@@ -40,6 +40,7 @@ class ThirdParty:
                 raise ValidationError("A supplier cannot be its own subcontractor.")
             e.data_locations = [str(x).strip() for x in e.data_locations or [] if str(x).strip()]
             e.certifications = [str(x).strip() for x in e.certifications or [] if str(x).strip()]
+            self._lei(e)
         elif isinstance(e, Service):
             self._name(e, "Service")
             self._enum(e.criticality, SERVICE_CRITICALITIES, "criticality")
@@ -48,6 +49,7 @@ class ThirdParty:
             self._non_negative(e.outage_cost_per_hour, "outage_cost_per_hour")
             e.asset_ids = list(dict.fromkeys(e.asset_ids or []))
             e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
+            e.data_locations = [str(x).strip() for x in e.data_locations or [] if str(x).strip()]
         elif isinstance(e, Customer):
             self._name(e, "Customer")
             e.regulations = list(dict.fromkeys(e.regulations or []))

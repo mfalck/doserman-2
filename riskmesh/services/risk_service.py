@@ -26,7 +26,9 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
+from .dora import DoraExtract
 from .excel import ExcelExchange
+from .incidents import INCIDENT_WRITE_METHODS, Incidents
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
 from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
@@ -58,7 +60,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, ExcelExchange):
+class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -363,6 +365,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Exce
             self._name(e, "Business unit")
             self._enum(e.organization_type, ORGANIZATION_TYPES, "organization_type")
             e.delegate_ids = list(dict.fromkeys(e.delegate_ids or []))
+            self._lei(e)
         elif isinstance(e, Asset):
             self._name(e, "Asset")
             if not e.asset_type:
@@ -408,7 +411,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Exce
             self._enum(e.event_type, CONTROL_EVENT_TYPES, "event_type")
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
-        elif not self._validate_portfolio(e):
+        elif not self._validate_portfolio(e) and not self._validate_incident(e):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -458,6 +461,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Exce
                 setattr(candidate, k, v)
         if "name" in changes:
             self._validate(candidate)
+        self._lei(candidate)
         self._check_unit_rules(candidate)
         return self._update(BusinessUnit, unit_id, changes)
 
@@ -1105,7 +1109,8 @@ WRITE_METHODS = (
     "create_control", "update_control", "delete_control", "create_risk_event", "update_risk_event",
     "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
     "import_data", "label_run", "reset_all", "_store_run",
-) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS + PORTFOLIO_WRITE_METHODS
+) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
+     + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS)
 
 
 def _write(method):

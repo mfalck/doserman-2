@@ -24,10 +24,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..domain import audit
 from ..domain.errors import ValidationError
-from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
+from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             ControlEvent, Correlation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             ControlEvent, Correlation, Incident, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -64,6 +64,7 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Parent", "parent_id", "ref", ref=BusinessUnit, width=24),
         Col("Risk owner", "risk_owner_id", "ref", ref=Person, width=20),
         Col("Delegates", "delegate_ids", "refs", ref=Person, width=24),
+        Col("LEI", "lei", width=22), Col("Country", "country", width=9),
         Col("Description", "description", width=40)]),
     ("People", Person, [
         Col("Name", "name", required=True, width=24), Col("Title", "title", width=20),
@@ -84,6 +85,8 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Certifications", "certifications", "list", width=24),
         Col("Exit plan", "exit_plan", "bool", width=10),
         Col("Subcontractors", "subcontractor_ids", "refs", ref=Supplier, width=26),
+        Col("LEI", "lei", width=22), Col("Company number", "company_number", width=14),
+        Col("Ultimate parent", "parent_company", width=22),
         Col("Description", "description", width=40)]),
     ("Services", Service, [
         Col("Name", "name", required=True, width=28),
@@ -94,6 +97,8 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Outage cost per hour", "outage_cost_per_hour", "number", width=14),
         Col("Suppliers", "supplier_ids", "refs", ref=Supplier, width=28),
         Col("Assets", "asset_ids", "refs", ref=Asset, width=24),
+        Col("ICT service type", "ict_service_type", width=24),
+        Col("Data locations", "data_locations", "list", width=16),
         Col("Description", "description", width=40)]),
     ("Customers", Customer, [
         Col("Name", "name", required=True, width=26), Col("Sector", "sector", width=12),
@@ -154,6 +159,18 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Status", "status", "enum", values=RISK_EVENT_STATUSES, width=14),
         Col("Financial impact", "financial_impact", "number", width=14),
         Col("Description", "description", width=40), Col("Impact description", "impact_description", width=30)]),
+    ("Incidents", Incident, [
+        Col("Title", "title", required=True, width=30),
+        Col("Detected (YYYY-MM-DD HH:MM)", "detected_at", "time", required=True, width=17),
+        Col("Status", "status", "enum", values=INCIDENT_STATUSES, width=12),
+        Col("NIS2 significant", "nis2_significant", "maybe", width=11),
+        Col("Services", "service_ids", "refs", ref=Service, width=26),
+        Col("Started at supplier", "supplier_ids", "refs", ref=Supplier, width=22),
+        Col("Risk", "risk_id", "ref", ref=Risk, width=22), Col("Owner", "owner_id", "ref", ref=Person, width=20),
+        Col("Resolved", "resolved_at", "time", width=17),
+        Col("Financial impact", "financial_impact", "number", width=14),
+        Col("Root cause", "root_cause", width=30), Col("Description", "description", width=40),
+        Col("Notifications sent (JSON)", "notifications", "json", width=30)]),
     ("Control tests", ControlEvent, [
         Col("Control", "control_id", "ref", required=True, ref=Control, width=28),
         Col("Date", "date", "date", required=True, width=12),
@@ -178,6 +195,7 @@ README = [
     "    lognormal: low P10 and high P90 (80% of events between them); pert/triangular: min, most likely, max;",
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
+    "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
     "- Correlations: how strongly two risks tend to have bad years together, -1 to 1 (0.3 weak, 0.6 strong).",
     "- Appetite tolerance: points 'loss @ chance', e.g. '1000000 @ 10%; 10000000 @ 1%' = at most 10% chance",
     "    per year of losing more than 1,000,000 and at most 1% of more than 10,000,000. No organisation = all.",
@@ -343,7 +361,8 @@ class ExcelExchange:
         """id -> the text written for a reference: the name, or the id where the name is not unique."""
         out: Dict[type, Dict[str, str]] = {}
         for cls, items in data.items():
-            label = (lambda e: f"{e.date} {e.id[:8]}") if cls is ControlEvent else (lambda e: getattr(e, "name", e.id))
+            label = ((lambda e: f"{e.date} {e.id[:8]}") if cls is ControlEvent
+                     else (lambda e: getattr(e, "name", None) or getattr(e, "title", None) or e.id))
             counts: Dict[str, int] = {}
             for e in items:
                 counts[label(e)] = counts.get(label(e), 0) + 1
@@ -371,6 +390,12 @@ class ExcelExchange:
             return MODEL_NAMES.get(v.get("dist")) or json.dumps(v)  # custom distributions keep their JSON
         if c.kind == "spec_value":
             return v.get(c.note) if v and v.get("dist") in SPEC_FIELDS else None
+        if c.kind == "maybe":
+            return None if v is None else ("yes" if v else "no")
+        if c.kind == "json":
+            return json.dumps(v, ensure_ascii=False) if v else None
+        if c.kind == "time":
+            return v.replace("T", " ") if v else None
         if c.kind == "points":
             return SEP.join(f"{p['loss']:g} @ {p['probability'] * 100:g}%" for p in v or []) or None
         return v
@@ -564,6 +589,21 @@ class ExcelExchange:
             d[c.field] = _date(raw)
         elif c.kind == "points":
             d[c.field] = _points(raw)
+        elif c.kind == "maybe":
+            t = _text(raw)
+            d[c.field] = None if t is None else _bool(t)
+        elif c.kind == "json":
+            t = _text(raw)
+            try:
+                d[c.field] = json.loads(t) if t else {}
+            except json.JSONDecodeError:
+                raise ValueError("not valid JSON; leave it empty or as downloaded") from None
+        elif c.kind == "time":
+            if isinstance(raw, datetime):
+                d[c.field] = raw.strftime("%Y-%m-%dT%H:%M")
+            else:
+                t = _text(raw)
+                d[c.field] = t.replace(" ", "T") if t else None
         else:
             d[c.field] = _text(raw)
 

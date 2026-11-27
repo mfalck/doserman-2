@@ -15,14 +15,14 @@ from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..services.demo import seed_demo
 from .dialogs import LoginDialog
-from .pages import (AnalysisPage, AuditPage, ControlsPage, DashboardPage, OrganisationPage, PortfolioPage, ReportsPage,
-                    RisksPage, ThirdPartyPage)
+from .pages import (AnalysisPage, AuditPage, ControlsPage, DashboardPage, IncidentsPage, OrganisationPage, PortfolioPage,
+                    ReportsPage, RisksPage, ThirdPartyPage)
 from .widgets import guarded
 
 
 class MainWindow(QMainWindow):
-    PAGES = ["Overview", "Organisation", "Risks", "Controls", "Third parties", "Appetite", "Analysis", "Reports",
-             "Audit log"]
+    PAGES = ["Overview", "Organisation", "Risks", "Controls", "Incidents", "Third parties", "Appetite", "Analysis",
+             "Reports", "Audit log"]
 
     def __init__(self, settings: Settings, svc=None, user=None):
         super().__init__()
@@ -50,6 +50,7 @@ class MainWindow(QMainWindow):
         defaults = {"engine": settings.engine, "n_trials": settings.n_trials, "seed": settings.seed}
         self.pages = [DashboardPage(self.svc, self.refresh_all), OrganisationPage(self.svc, self.refresh_all),
                       RisksPage(self.svc, self.refresh_all), ControlsPage(self.svc, self.refresh_all),
+                      IncidentsPage(self.svc, self.refresh_all),
                       ThirdPartyPage(self.svc, self.refresh_all), PortfolioPage(self.svc, self.refresh_all),
                       AnalysisPage(self.svc, self.refresh_all, defaults), ReportsPage(self.svc, self.refresh_all),
                       AuditPage(self.svc, self.refresh_all)]

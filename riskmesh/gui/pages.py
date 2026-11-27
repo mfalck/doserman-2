@@ -7,13 +7,13 @@ from typing import Any, Callable, Dict, Optional
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QLogValueAxis, QValueAxis
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
-from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from ..services import RiskService
-from .dialogs import (AppetiteDialog, ControlDialog, CorrelationDialog, CustomerDialog, RiskDialog, ServiceDialog,
-                      SupplierDialog, UnitDialog)
+from .dialogs import (AppetiteDialog, ControlDialog, CorrelationDialog, CustomerDialog, IncidentDialog, RiskDialog,
+                      ServiceDialog, SupplierDialog, UnitDialog)
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
 
@@ -740,6 +740,10 @@ class ThirdPartyPage(Page):
         stress = QPushButton("Stress test selected")
         stress.setToolTip("What an outage of this length costs us and our customers")
         stress.clicked.connect(self.run_stress)
+        dora = QPushButton("DORA register extract…")
+        dora.setToolTip("For the selected customer: what its DORA register of information needs from us")
+        dora.clicked.connect(self.export_dora)
+        bar.addWidget(dora)
         bar.addWidget(QLabel("Outage"))
         bar.addWidget(self.stress_hours)
         bar.addWidget(stress)
@@ -866,6 +870,29 @@ class ThirdPartyPage(Page):
         if st["customers_without_penalty_terms"]:
             lines.append("No penalty terms registered for: " + ", ".join(st["customers_without_penalty_terms"]))
         self.exposure.setPlainText("\n".join(lines))
+
+    def export_dora(self) -> None:
+        key = self.table.selected_key()
+        if not key or self._tab() != "Customers":
+            QMessageBox.information(self, "DORA register extract", "Select a customer first.")
+            return
+        x = guarded(self, lambda: self.svc.dora_extract(key))
+        if not x:
+            return
+        lines = [f"{x['customer']['name']}: providers in the chain behind its services"]
+        lines += [f"  rank {r['rank']}  {r['provider'][:30]:<31}{r['lei'] or '':<22}serves {r['recipient']}"
+                  for r in x["supply_chain"]]
+        if x["gaps"]:
+            lines += ["", "Still missing:"] + [f"  - {g}" for g in x["gaps"]]
+        self.exposure.setPlainText("\n".join(lines))
+        path, _ = QFileDialog.getSaveFileName(self, "Save DORA register extract",
+                                              f"dora-{x['customer']['name']}.xlsx", "Excel workbook (*.xlsx)")
+        if path:
+            def write():
+                with open(path, "wb") as f:
+                    f.write(self.svc.export_dora_extract(key))
+                return True
+            guarded(self, write)
 
     def _dialog(self, entity=None):
         tab = self._tab()
@@ -1055,6 +1082,141 @@ class PortfolioPage(Page):
             if guarded(self, lambda: self.svc.delete_correlation(key)) is not None:
                 self.changed()
 
+DEADLINE_COLORS = {"overdue": "#fecaca", "due_soon": "#fef08a", "late": "#fed7aa", "sent": "#bbf7d0",
+                   "not_sent": "#fecaca"}
+DEADLINE_TEXT = {"overdue": "overdue", "due_soon": "due soon", "pending": "pending", "sent": "sent", "late": "sent late",
+                 "no_deadline": "no deadline", "not_sent": "not sent"}
+
+
+class IncidentsPage(Page):
+    """Incidents and the clock they start: NIS2 reporting and each affected customer's notification deadline."""
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Incidents"))
+        self.cards = {k: Card(k) for k in ("Open incidents", "Deadlines overdue", "Due within 12 h", "Not assessed")}
+        row = QHBoxLayout()
+        for c in self.cards.values():
+            row.addWidget(c)
+        self.layout_.addLayout(row)
+        bar = QHBoxLayout()
+        self.show_closed = QComboBox()
+        self.show_closed.addItem("Open incidents", True)
+        self.show_closed.addItem("All incidents", False)
+        self.show_closed.currentIndexChanged.connect(self.refresh)
+        bar.addWidget(self.show_closed)
+        bar.addStretch()
+        for text, slot in (("New", self.add), ("Edit", self.edit), ("Delete", self.delete)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        self.layout_.addLayout(bar)
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Detected", "Incident", "Status", "NIS2", "Customers", "Next deadline", "Overdue"],
+                           numeric=[4, 6])
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.table.itemSelectionChanged.connect(self.show_deadlines)
+        split.addWidget(self.table)
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom)
+        dbar = QHBoxLayout()
+        self.affected = QLabel("Select an incident to see its deadlines")
+        self.affected.setWordWrap(True)
+        dbar.addWidget(self.affected, 1)
+        sent = QPushButton("Mark sent now")
+        sent.clicked.connect(lambda: self.mark(None))
+        undo = QPushButton("Undo")
+        undo.clicked.connect(lambda: self.mark(""))
+        for b in (sent, undo):
+            self.edit_buttons.append(b)
+            dbar.addWidget(b)
+        bl.addLayout(dbar)
+        self.deadlines = Table(["Deadline", "To", "Due", "Status", "Time left", "Sent", "Note"])
+        bl.addWidget(self.deadlines)
+        split.addWidget(bottom)
+        self.layout_.addWidget(split, 1)
+
+    def refresh(self) -> None:
+        o = self.svc.incident_overview()
+        self.cards["Open incidents"].set(str(len(o["open"])))
+        self.cards["Deadlines overdue"].set(str(o["overdue"]))
+        self.cards["Due within 12 h"].set(str(sum(1 for d in o["deadlines"] if d["status"] == "due_soon")))
+        self.cards["Not assessed"].set(str(o["unassessed"]), "NIS2 significance")
+        by_id = {r["id"]: r for r in o["open"]}
+        incidents = self.svc.list_incidents(open_only=self.show_closed.currentData())
+        rows, colors = [], {}
+        for n, i in enumerate(incidents):
+            r = by_id.get(i.id, {})
+            if r.get("overdue"):
+                colors[(n, 6)] = "#fecaca"
+            rows.append([i.detected_at.replace("T", " "), i.title, title(i.status),
+                         {True: "significant", False: "no", None: "not assessed"}[i.nis2_significant],
+                         r.get("customer_count", ""), (r.get("next_due") or "").replace("T", " "), r.get("overdue", "")])
+        self.table.fill(rows, keys=[i.id for i in incidents], colors=colors)
+        self.deadlines.fill([])
+        self.affected.setText("Select an incident to see its deadlines")
+
+    def show_deadlines(self) -> None:
+        key = self.table.selected_key()
+        if not key:
+            return
+        d = self.svc.incident_deadlines(key)
+        services = ", ".join(f"{s['name']} ({s['how']})" for s in d["services"]) or "none registered"
+        self.affected.setText(f"<b>Services hit:</b> {services}<br><b>Customers:</b> "
+                              + (", ".join(c["name"] for c in d["customers"]) or "none")
+                              + ("" if d["nis2_assessed"] else "<br><span style='color:#b45309'>NIS2 significance not "
+                                 "assessed yet: the reporting deadlines are not shown until it is.</span>"))
+        rows = [[x["label"], x["to"], (x["due"] or "-").replace("T", " "), DEADLINE_TEXT[x["status"]],
+                 "" if x["hours_left"] is None else f"{x['hours_left']:g} h",
+                 (x["sent_at"] or "").replace("T", " "), x.get("note") or ""] for x in d["deadlines"]]
+        self.deadlines.fill(rows, keys=[x["key"] for x in d["deadlines"]],
+                            colors={(n, 3): DEADLINE_COLORS[x["status"]] for n, x in enumerate(d["deadlines"])
+                                    if x["status"] in DEADLINE_COLORS})
+
+    def mark(self, sent_at) -> None:
+        inc, key = self.table.selected_key(), self.deadlines.selected_key()
+        if not inc or not key:
+            QMessageBox.information(self, "Incidents", "Select an incident and one of its deadlines first.")
+            return
+        if guarded(self, lambda: self.svc.record_notification(inc, key, sent_at)):
+            self.changed()
+            self._reselect(inc)
+            self.show_deadlines()  # the refresh cleared them; the selection may not have changed
+
+    def _reselect(self, incident_id: str) -> None:
+        for r in range(self.table.rowCount()):
+            if self.table.item(r, 0) and self.table.item(r, 0).data(Qt.UserRole) == incident_id:
+                self.table.selectRow(r)
+
+    def add(self):
+        dialog = IncidentDialog(self.svc, parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_incident(v.pop("title"), v.pop("detected_at"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        dialog = IncidentDialog(self.svc, self.svc.get_incident(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_incident(key, **dialog.values())):
+                    self.changed()
+
+    def delete(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        reason, ok = QInputDialog.getText(self, "Delete", f"Delete the incident '{self.svc.get_incident(key).title}'?"
+                                          "\n\nReason (recorded in the audit log):")
+        if ok and guarded(self, lambda: self.svc.delete_incident(key)) is not None:
+            self.changed()
+
 
 def _editor_only(method):
     """Viewers can open pages but not change anything (double-clicks included)."""
@@ -1070,6 +1232,7 @@ def _editor_only(method):
 for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (RisksPage, ("add", "edit", "delete")), (ControlsPage, ("add", "edit", "delete")),
                      (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete")),
+                     (IncidentsPage, ("add", "edit", "delete", "mark")),
                      (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
                                       "edit_correlation", "delete_correlation"))):
     for _name in _names:

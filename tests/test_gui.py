@@ -190,3 +190,27 @@ def test_analysis_page_shows_appetite_and_correlation_warning(window):
     page.trials.setValue(5_000)
     page.run(use_cache=True)
     assert "correlations applied" in page.appetite_info.text()
+
+
+def test_incidents_page_shows_deadlines_and_marks_sent(window):
+    page = window.pages[window.PAGES.index("Incidents")]
+    window.nav.setCurrentRow(window.PAGES.index("Incidents"))
+    assert page.table.rowCount() == 1 and page.cards["Deadlines overdue"].value.text() == "1"
+    page.table.selectRow(0)
+    labels = [page.deadlines.item(r, 0).text() for r in range(page.deadlines.rowCount())]
+    assert "NIS2 incident notification" in labels and "Notify East Savings Bank" in labels
+    page.deadlines.selectRow(labels.index("Notify East Savings Bank"))
+    page.mark(None)
+    page.table.selectRow(0)
+    status = {page.deadlines.item(r, 0).text(): page.deadlines.item(r, 3).text()
+              for r in range(page.deadlines.rowCount())}
+    assert status["Notify East Savings Bank"] == "sent late"
+
+
+def test_incident_dialog_round_trip(window):
+    from riskmesh.gui.dialogs import IncidentDialog
+    svc = window.svc
+    inc = svc.list_incidents()[0]
+    v = IncidentDialog(svc, inc).values()
+    assert v["detected_at"].replace(" ", "T") == inc.detected_at and v["nis2_significant"] == inc.nis2_significant
+    assert v["supplier_ids"] == inc.supplier_ids

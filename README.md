@@ -272,6 +272,67 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Incidents: the reporting clock
+
+An **incident** records when we became aware of it (`detected_at`, local time
+`YYYY-MM-DDTHH:MM`), the services it hits (`service_ids`), the suppliers where
+it started (`supplier_ids`; every service behind them counts as hit, also
+through subcontractors), whether it is significant under NIS2
+(`nis2_significant`: true, false or null for not assessed yet), and the risk
+that materialised.
+
+From that RiskMesh derives the deadlines:
+
+| To | Deadline |
+|---|---|
+| CSIRT / authority (NIS2 art. 23, if significant) | early warning 24 h, incident notification 72 h, final report one month after the notification |
+| Each affected customer | its contractual `notification_hours` from detection, or "no deadline agreed" |
+
+Customers under DORA get a note: they must classify the incident themselves
+and, if it is major, report within 4 hours of classifying it (no later than 24
+hours after becoming aware), so they need our information early. Each deadline
+is `pending`, `due_soon` (within 12 h), `overdue`, `sent` or `late`. Recording
+a notification (`POST /api/incidents/{id}/notifications {"key": ...}`) stamps
+the time; the final NIS2 report then counts from the actual notification. A
+closed incident stops the clock: anything not sent shows as `not_sent`.
+
+```bash
+riskmesh incidents        # open incidents and every deadline not met yet, soonest first
+```
+
+The desktop application and the web app have an *Incidents* page with the
+register, the next deadlines across all incidents and a "sent now" button per
+deadline. Incidents are in the Excel workbook and the audit log. A working aid,
+not legal advice: check the national NIS2 rules and the customers' contracts.
+
+## DORA: what a financial customer's register needs from us
+
+A financial entity's register of information covers its ICT providers and the
+chain behind them. For a customer we are rank 1, our suppliers rank 2 and
+their subcontractors rank 3 and beyond. `GET /api/customers/{id}/dora`
+(and `/dora.xlsx`) collects it per customer:
+
+- the provider (us): the top company unit's `lei` and `country`;
+- the services the customer uses, with `ict_service_type`, criticality,
+  RTO/RPO and `data_locations`;
+- every provider in the chain with LEI or company number, country, ultimate
+  parent, data locations, certifications and exit plan (sheet *Providers
+  (B_05.01)*), and who serves whom per service (*Supply chain (B_05.02)*);
+- the contract terms and the last 12 months' incidents that hit the customer;
+- `gaps`: what is still missing (an LEI, a country, a service type ...).
+
+LEIs are checked (ISO 17442 check digits). The workbook follows the register
+templates but is not the regulatory file format: it is the basis the customer
+reports from. Check the columns against the current EBA taxonomy.
+
+```bash
+riskmesh third-party dora "East Savings Bank" --xlsx dora-east.xlsx
+```
+
+In the web app the customer's dependency panel (Third parties) shows the
+chain, the gaps and a download button for DORA customers; the desktop
+application has *DORA register extract…* on the Third parties page.
+
 ## Risk appetite and correlation
 
 ### Correlation: bad years that come together

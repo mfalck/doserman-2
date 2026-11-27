@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ..domain import risk_model
 from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
-                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, BusinessUnit, Control, Correlation,
-                             Customer, Risk, Service, Supplier)
+                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, Appetite, BusinessUnit, Control,
+                             Correlation, Customer, Incident, Risk, Service, Supplier)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 
@@ -81,15 +81,21 @@ class UnitDialog(BaseDialog):
         self.owner = _person_combo(svc, unit.risk_owner_id if unit else None)
         self.description = QPlainTextEdit((unit.description or "") if unit else "")
         self.description.setFixedHeight(60)
+        self.lei = QLineEdit((unit.lei or "") if unit else "")
+        self.lei.setPlaceholderText("Legal Entity Identifier, for a company (customers' DORA registers)")
+        self.country = QLineEdit((unit.country or "") if unit else "")
+        self.country.setPlaceholderText("e.g. DK")
         for label, w in (("Name", self.name), ("Code", self.code), ("Type", self.kind),
-                         ("Part of", self.parent_unit), ("Risk owner", self.owner), ("Description", self.description)):
+                         ("Part of", self.parent_unit), ("Risk owner", self.owner), ("LEI", self.lei),
+                         ("Country", self.country), ("Description", self.description)):
             self.form.addRow(label, w)
         self.finish()
 
     def values(self) -> Dict[str, Any]:
         return {"name": self.name.text(), "code": self.code.text().strip() or None,
                 "organization_type": self.kind.currentData(), "parent_id": self.parent_unit.currentData(),
-                "risk_owner_id": self.owner.currentData(),
+                "risk_owner_id": self.owner.currentData(), "lei": self.lei.text().strip() or None,
+                "country": self.country.text().strip() or None,
                 "description": self.description.toPlainText().strip() or None}
 
 
@@ -335,6 +341,10 @@ class SupplierDialog(BaseDialog):
         self.certs.setPlaceholderText("e.g. ISO 27001, ISAE 3402")
         self.subs = _check_list([x for x in svc.list_suppliers() if not s or x.id != s.id],
                                 set(s.subcontractor_ids) if s else set())
+        self.lei = QLineEdit((s.lei or "") if s else "")
+        self.company_number = QLineEdit((s.company_number or "") if s else "")
+        self.company_number.setPlaceholderText("e.g. CVR")
+        self.parent_company = QLineEdit((s.parent_company or "") if s else "")
         self.description = QPlainTextEdit((s.description or "") if s else "")
         self.description.setFixedHeight(50)
         for label, w in (("Name", self.name), ("Tier", self.tier), ("Country", self.country),
@@ -342,7 +352,8 @@ class SupplierDialog(BaseDialog):
                          ("Contract end", self.contract_end), ("Next review", self.next_review),
                          ("", self.personal), ("Data locations", self.locations),
                          ("Certifications / reports", self.certs), ("", self.exit_plan),
-                         ("Its subcontractors", self.subs), ("Description", self.description)):
+                         ("Its subcontractors", self.subs), ("LEI", self.lei), ("Company number", self.company_number),
+                         ("Ultimate parent", self.parent_company), ("Description", self.description)):
             self.form.addRow(label, w)
         self.finish()
 
@@ -354,7 +365,9 @@ class SupplierDialog(BaseDialog):
                 "next_review": self.next_review.text().strip() or None,
                 "processes_personal_data": self.personal.isChecked(), "exit_plan": self.exit_plan.isChecked(),
                 "data_locations": _split(self.locations.text()), "certifications": _split(self.certs.text()),
-                "subcontractor_ids": _checked(self.subs),
+                "subcontractor_ids": _checked(self.subs), "lei": self.lei.text().strip() or None,
+                "company_number": self.company_number.text().strip() or None,
+                "parent_company": self.parent_company.text().strip() or None,
                 "description": self.description.toPlainText().strip() or None}
 
 
@@ -374,7 +387,12 @@ class ServiceDialog(BaseDialog):
         self.assets = _check_list(svc.list_assets(), set(s.asset_ids) if s else set(), height=90)
         self.description = QPlainTextEdit((s.description or "") if s else "")
         self.description.setFixedHeight(50)
+        self.ict_type = QLineEdit((s.ict_service_type or "") if s else "")
+        self.ict_type.setPlaceholderText("e.g. Software as a service (SaaS)")
+        self.locations = QLineEdit(_csv(s.data_locations) if s else "")
+        self.locations.setPlaceholderText("where its data is stored and processed, e.g. DK, DE")
         for label, w in (("Name", self.name), ("Delivered by", self.unit), ("Criticality", self.criticality),
+                         ("ICT service type", self.ict_type), ("Data locations", self.locations),
                          ("Owner", self.owner), ("Recovery time (RTO)", self.rto),
                          ("Recovery point (RPO)", self.rpo), ("Outage cost per hour", self.cost),
                          ("Depends on suppliers", self.suppliers),
@@ -388,6 +406,8 @@ class ServiceDialog(BaseDialog):
                 "rto_hours": _float(self.rto), "rpo_hours": _float(self.rpo),
                 "outage_cost_per_hour": _float(self.cost),
                 "supplier_ids": _checked(self.suppliers), "asset_ids": _checked(self.assets),
+                "ict_service_type": self.ict_type.text().strip() or None,
+                "data_locations": _split(self.locations.text()),
                 "description": self.description.toPlainText().strip() or None}
 
 
@@ -546,6 +566,56 @@ class AppetiteDialog(BaseDialog):
         return {"name": self.name.text(), "business_unit_id": self.unit.currentData(),
                 "owner_id": self.owner.currentData(), "points": points,
                 "statement": self.statement.toPlainText().strip() or None}
+
+
+class IncidentDialog(BaseDialog):
+    """An incident: when we became aware of it, what it hits and whether it is significant under NIS2."""
+
+    def __init__(self, svc: RiskService, incident: Optional[Incident] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit incident" if incident else "New incident", incident is not None, parent)
+        i = incident
+        from datetime import datetime
+        self.title_ = QLineEdit(i.title if i else "")
+        self.detected = QLineEdit(i.detected_at.replace("T", " ") if i else datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.detected.setPlaceholderText("YYYY-MM-DD HH:MM - when we became aware (the deadlines run from here)")
+        self.status = _enum_combo(INCIDENT_STATUSES, i.status if i else "OPEN")
+        self.nis2 = QComboBox()
+        for text, value in (("Not assessed yet", None), ("Yes - significant (reporting deadlines apply)", True),
+                            ("No - not significant", False)):
+            self.nis2.addItem(text, value)
+        self.nis2.setCurrentIndex(max(0, self.nis2.findData(i.nis2_significant if i else None)))
+        self.services = _check_list(svc.list_services(), set(i.service_ids) if i else set(), height=90)
+        self.suppliers = _check_list(svc.list_suppliers(), set(i.supplier_ids) if i else set(), height=80)
+        self.risk = QComboBox()
+        self.risk.addItem("(none)", None)
+        for r in sorted(svc.list_risks(), key=lambda r: r.name):
+            self.risk.addItem(r.name, r.id)
+        if i and i.risk_id:
+            self.risk.setCurrentIndex(max(0, self.risk.findData(i.risk_id)))
+        self.owner = _person_combo(svc, i.owner_id if i else None)
+        self.resolved = QLineEdit((i.resolved_at or "").replace("T", " ") if i else "")
+        self.resolved.setPlaceholderText("YYYY-MM-DD HH:MM")
+        self.impact = QLineEdit("" if not i or i.financial_impact is None else f"{i.financial_impact:g}")
+        self.root_cause = QLineEdit((i.root_cause or "") if i else "")
+        self.description = QPlainTextEdit((i.description or "") if i else "")
+        self.description.setFixedHeight(50)
+        self._notifications = dict(i.notifications) if i else {}
+        for label, w in (("Title", self.title_), ("Detected", self.detected), ("Status", self.status),
+                         ("NIS2 significant", self.nis2), ("Services affected", self.services),
+                         ("Started at supplier", self.suppliers), ("Risk that materialised", self.risk),
+                         ("Handled by", self.owner), ("Resolved", self.resolved), ("Financial impact", self.impact),
+                         ("Root cause", self.root_cause), ("Description", self.description)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        return {"title": self.title_.text(), "detected_at": self.detected.text().strip(),
+                "status": self.status.currentData(), "nis2_significant": self.nis2.currentData(),
+                "service_ids": _checked(self.services), "supplier_ids": _checked(self.suppliers),
+                "risk_id": self.risk.currentData(), "owner_id": self.owner.currentData(),
+                "resolved_at": self.resolved.text().strip() or None, "financial_impact": _float(self.impact),
+                "root_cause": self.root_cause.text().strip() or None,
+                "description": self.description.toPlainText().strip() or None}
 
 
 class LoginDialog(QDialog):
