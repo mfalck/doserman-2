@@ -4,16 +4,28 @@ REST API (presentation tier for web front ends such as the Lovable app).
 Run:  py -m riskmesh serve            -> http://127.0.0.1:8000/docs
 
 The browser talks only to this API; database credentials stay on the
-server side. Endpoints are async and therefore handled one at a time,
-which keeps the file-based backend safe without extra locking.
+server side. Endpoints are async and therefore handled one at a time per
+process; several processes on one SQL database are serialised by the
+storage write lock.
+
+Access ([auth] mode in riskmesh.toml):
+  none        open API (X-API-Key if configured); X-User-Id names the user
+  local/oidc  every /api request needs "Authorization: Bearer <token>" (a
+              login session or an API token; X-API-Key: <token> also works).
+              Roles: viewer = read and run analyses, editor = change risk
+              data, admin = users, tokens and replacing all data on import.
 """
 
 from typing import Any, Dict, List, Optional
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
+import logging
+import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -22,7 +34,9 @@ from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..domain import audit
 from ..domain import models as m
-from ..domain.errors import ConflictError, NotFoundError, ValidationError
+from ..domain.errors import (AuthenticationError, ConflictError, NotFoundError, PermissionDenied,
+                             ValidationError)
+from ..domain.models import User
 from ..services import RiskService
 from . import schemas as s
 
@@ -31,9 +45,47 @@ def _changes(model) -> Dict[str, Any]:
     return model.model_dump(exclude_unset=True)
 
 
+log = logging.getLogger(__name__)
+MAX_FAILED_LOGINS = 5
+LOCKOUT_SECONDS = 60
+
+
+def required_role(method: str, path: str, query: Dict[str, str]) -> str:
+    """The whole access policy in one place."""
+    if path.startswith(("/api/users", "/api/tokens")):
+        return "admin"
+    if path == "/api/import":
+        return "editor" if query.get("replace", "true").lower() == "false" else "admin"
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return "viewer"
+    if path in ("/api/simulations", "/api/simulations/compare") or (
+            path.startswith("/api/runs/") and path.endswith("/reproduce")):
+        return "viewer"  # running an analysis does not change risk data
+    return "editor"
+
+
+def _bootstrap_admin(svc: RiskService) -> None:
+    """For containers: RISKMESH_ADMIN_USER/RISKMESH_ADMIN_PASSWORD create the first admin if there are no users."""
+    user, password = os.environ.get("RISKMESH_ADMIN_USER"), os.environ.get("RISKMESH_ADMIN_PASSWORD")
+    if user and password and not svc.list_users():
+        with svc.context(actor="system", source="bootstrap"):
+            svc.create_user(user, "admin", password)
+        log.warning("Created the first administrator '%s' from RISKMESH_ADMIN_USER", user)
+
+
 def create_app(service: Optional[RiskService] = None, settings: Optional[Settings] = None) -> FastAPI:
     settings = settings or load_settings()
     svc = service or make_service(settings, actor="anonymous", source="api")
+    auth_on = settings.auth_mode != "none"
+    if auth_on:
+        _bootstrap_admin(svc)
+    else:
+        log.warning("auth.mode = none: the API is open to anyone who can reach it")
+    oidc = None
+    if settings.oidc_login:
+        from .oidc import OidcClient
+        oidc = OidcClient(settings)
+    failed_logins: Dict[str, List[float]] = {}
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -68,19 +120,151 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def _conflict(_: Request, exc: ConflictError):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    async def require_api_key(x_api_key: Optional[str] = Header(None),
-                              x_user_id: Optional[str] = Header(None),
-                              x_change_reason: Optional[str] = Header(None)):
-        if settings.api_key and x_api_key != settings.api_key:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid X-API-Key header")
-        # Audit context for this request. The user is informational until real
-        # authentication exists; the reason explains why a change was made.
-        svc.actor = unquote(x_user_id or "anonymous")[:100] or "anonymous"
+    @app.exception_handler(AuthenticationError)
+    async def _unauthenticated(_: Request, exc: AuthenticationError):
+        return JSONResponse(status_code=401, content={"detail": str(exc)}, headers={"WWW-Authenticate": "Bearer"})
+
+    @app.exception_handler(PermissionDenied)
+    async def _forbidden(_: Request, exc: PermissionDenied):
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    def _token_from(authorization: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
+        if authorization and authorization.lower().startswith("bearer "):
+            return authorization[7:].strip()
+        return x_api_key
+
+    async def authorize(request: Request, authorization: Optional[str] = Header(None),
+                        x_api_key: Optional[str] = Header(None), x_user_id: Optional[str] = Header(None),
+                        x_change_reason: Optional[str] = Header(None)) -> Optional[User]:
+        """Who is calling, may they do this, and the audit context for the request."""
         svc.source = "api"
         svc.reason = (unquote(x_change_reason)[:500] or None) if x_change_reason else None
+        if not auth_on:
+            if settings.api_key and x_api_key != settings.api_key:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or invalid X-API-Key header")
+            svc.actor = unquote(x_user_id or "anonymous")[:100] or "anonymous"
+            return None
+        user = svc.resolve_token(_token_from(authorization, x_api_key))
+        svc.require_role(user, required_role(request.method, request.url.path, dict(request.query_params)))
+        svc.actor = user.username
+        request.state.user = user
+        return user
 
-    # every /api route shares the API-key check
-    api = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
+    # every /api route (except /api/auth/*) goes through authorize()
+    api = APIRouter(prefix="/api", dependencies=[Depends(authorize)])
+    auth = APIRouter(prefix="/api/auth", tags=["auth"])
+
+    @auth.get("/config")
+    async def auth_config():
+        """What the login page should offer."""
+        return {"mode": settings.auth_mode, "local": settings.local_login, "oidc": settings.oidc_login,
+                "oidc_login_url": "/api/auth/oidc/login" if settings.oidc_login else None}
+
+    @auth.post("/login")
+    async def login(body: s.LoginRequest, request: Request):
+        if not settings.local_login:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Password login is not enabled")
+        key = f"{body.username.lower()}|{request.client.host if request.client else ''}"
+        now = time.time()
+        recent = [t for t in failed_logins.get(key, []) if now - t < LOCKOUT_SECONDS]
+        if len(recent) >= MAX_FAILED_LOGINS:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts; wait a minute.")
+        try:
+            user = svc.authenticate(body.username, body.password)
+        except AuthenticationError:
+            failed_logins[key] = recent + [now]
+            raise
+        failed_logins.pop(key, None)
+        with svc.context(actor=user.username, source="api"):
+            token, record = svc.issue_token(user.id, "session", hours=settings.session_hours)
+        return {"token": token, "expires_at": record.expires_at, "user": svc.user_view(user)}
+
+    @auth.post("/logout")
+    async def logout(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)):
+        token = _token_from(authorization, x_api_key)
+        if token and auth_on:
+            svc.logout(token)
+        return {"ok": True}
+
+    @auth.get("/me")
+    async def me(authorization: Optional[str] = Header(None), x_api_key: Optional[str] = Header(None)):
+        if not auth_on:
+            return {"username": "anonymous", "role": "admin", "auth_mode": "none"}
+        user = svc.resolve_token(_token_from(authorization, x_api_key))
+        if user is None:
+            raise AuthenticationError("Please log in.")
+        return {**svc.user_view(user), "auth_mode": settings.auth_mode}
+
+    @auth.post("/password")
+    async def change_own_password(body: s.PasswordChange, authorization: Optional[str] = Header(None)):
+        user = svc.resolve_token(_token_from(authorization, None))
+        if user is None:
+            raise AuthenticationError("Please log in.")
+        svc.authenticate(user.username, body.current_password)
+        with svc.context(actor=user.username, source="api"):
+            svc.set_password(user.id, body.new_password)
+        return {"ok": True}
+
+    @auth.get("/oidc/login")
+    async def oidc_login():
+        if oidc is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Single sign-on is not enabled")
+        return RedirectResponse(oidc.login_url(), status_code=302)
+
+    @auth.get("/oidc/callback")
+    async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None,
+                            error_description: Optional[str] = None):
+        if oidc is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Single sign-on is not enabled")
+        target = settings.oidc_frontend_url.rstrip("/") + "/login"
+        try:
+            if error:
+                raise AuthenticationError(error_description or error)
+            ident = oidc.identity(oidc.complete(code or "", state or ""))
+            with svc.context(actor=ident["username"], source="api:oidc"):
+                user = svc.upsert_external_user(ident["external_id"], ident["username"], ident["role"],
+                                                ident["display_name"], ident["email"])
+                token, _ = svc.issue_token(user.id, "session", hours=settings.session_hours)
+        except AuthenticationError as e:
+            return RedirectResponse(f"{target}#error={quote(str(e))}", status_code=302)
+        return RedirectResponse(f"{target}#token={token}", status_code=302)
+
+    # -- users and API tokens (admin) -------------------------------------------
+
+    @api.get("/users", tags=["users"])
+    async def list_users():
+        return [svc.user_view(u) for u in svc.list_users()]
+
+    @api.post("/users", status_code=201, tags=["users"])
+    async def create_user(body: s.UserCreate):
+        return svc.user_view(svc.create_user(body.username, body.role, body.password, body.display_name, body.email))
+
+    @api.patch("/users/{user_id}", tags=["users"])
+    async def update_user(user_id: str, body: s.UserUpdate):
+        return svc.user_view(svc.update_user(user_id, **_changes(body)))
+
+    @api.put("/users/{user_id}/password", tags=["users"])
+    async def set_user_password(user_id: str, body: s.PasswordSet):
+        svc.set_password(user_id, body.password)
+        return {"ok": True}
+
+    @api.delete("/users/{user_id}", status_code=204, tags=["users"])
+    async def delete_user(user_id: str):
+        svc.delete_user(user_id)
+
+    @api.get("/users/{user_id}/tokens", tags=["users"])
+    async def list_tokens(user_id: str):
+        return [{k: v for k, v in t.to_dict().items() if k != "token_hash"} for t in svc.list_tokens(user_id)]
+
+    @api.post("/users/{user_id}/tokens", status_code=201, tags=["users"])
+    async def create_token(user_id: str, body: s.TokenCreate):
+        """An API token for scripts. The token is shown only in this response."""
+        token, record = svc.issue_token(user_id, "api", body.name, hours=body.days * 24 if body.days else None)
+        return {"token": token, **{k: v for k, v in record.to_dict().items() if k != "token_hash"}}
+
+    @api.delete("/tokens/{token_id}", status_code=204, tags=["users"])
+    async def revoke_token(token_id: str):
+        svc.revoke_token(token_id)
 
     @api.get("/meta", tags=["meta"])
     async def meta():
@@ -347,5 +531,6 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         svc.source = f"import:sha256:{audit.sha256(data)}"
         return {"imported": svc.import_data(data, replace=replace)}
 
+    app.include_router(auth)
     app.include_router(api)
     return app

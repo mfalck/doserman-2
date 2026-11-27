@@ -65,3 +65,35 @@ def test_audit_page_verifies(window):
     page.refresh()
     page.verify()
     assert "intact" in page.status.text()
+
+
+def test_viewer_cannot_edit_in_the_desktop_app(app):
+    from riskmesh.gui.app import MainWindow
+    from riskmesh.services import RiskService
+    from riskmesh.storage import MemoryRepository
+    svc = RiskService(MemoryRepository())
+    seed_demo(svc)
+    svc.create_user("admin", "admin", "correct horse battery")
+    viewer = svc.create_user("vera", "viewer", "correct horse battery")
+    w = MainWindow(Settings(backend="memory", auth_mode="local"), svc, viewer)
+    assert svc.actor == "vera" and w.role == "viewer"
+    risks = w.pages[w.PAGES.index("Risks")]
+    assert risks.edit_buttons and not any(b.isEnabled() for b in risks.edit_buttons)
+    assert not risks.can_edit and not any(a.isEnabled() for a in w.admin_actions)
+    w.close()
+
+
+def test_login_dialog(app):
+    from riskmesh.gui.dialogs import LoginDialog
+    from riskmesh.services import RiskService
+    from riskmesh.storage import MemoryRepository
+    svc = RiskService(MemoryRepository())
+    svc.create_user("ed", "editor", "correct horse battery")
+    d = LoginDialog(svc)
+    d.username.setText("ed")
+    d.password.setText("wrong password!")
+    d.try_login()
+    assert d.user is None and "Wrong" in d.message.text()
+    d.password.setText("correct horse battery")
+    d.try_login()
+    assert d.user.username == "ed"

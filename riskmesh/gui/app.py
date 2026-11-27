@@ -14,6 +14,7 @@ from .. import __version__
 from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..services.demo import seed_demo
+from .dialogs import LoginDialog
 from .pages import AnalysisPage, AuditPage, ControlsPage, DashboardPage, OrganisationPage, RisksPage
 from .widgets import guarded
 
@@ -21,10 +22,14 @@ from .widgets import guarded
 class MainWindow(QMainWindow):
     PAGES = ["Overview", "Organisation", "Risks", "Controls", "Analysis", "Audit log"]
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, svc=None, user=None):
         super().__init__()
         self.settings = settings
-        self.svc = make_service(settings, source="gui")
+        self.svc = svc or make_service(settings, source="gui")
+        self.user = user
+        if user is not None:
+            self.svc.actor = user.username
+        self.role = user.role if user is not None else "admin"
         self.setWindowTitle(f"RiskMesh {__version__}")
         self.resize(1280, 820)
 
@@ -52,6 +57,7 @@ class MainWindow(QMainWindow):
         self.nav.currentRowChanged.connect(self._show_page)
         self._build_menu()
         self._build_status()
+        self._apply_role()
         self.nav.setCurrentRow(0)
 
     # -- navigation / refresh ------------------------------------------------
@@ -67,6 +73,7 @@ class MainWindow(QMainWindow):
     # -- menus ---------------------------------------------------------------------
 
     def _build_menu(self) -> None:
+        self.admin_actions = []
         file_menu = self.menuBar().addMenu("&File")
         for text, slot, shortcut in (("Import data (JSON)…", self.import_json, "Ctrl+I"),
                                      ("Export data (JSON)…", self.export_json, "Ctrl+E"),
@@ -84,6 +91,8 @@ class MainWindow(QMainWindow):
             action.triggered.connect(slot)
             if shortcut:
                 action.setShortcut(shortcut)
+            if slot in (self.import_json, self.load_demo):
+                self.admin_actions.append(action)
             file_menu.addAction(action)
         help_menu = self.menuBar().addMenu("&Help")
         about = QAction("About RiskMesh", self)
@@ -98,8 +107,9 @@ class MainWindow(QMainWindow):
         where = s.json_path if s.backend == "json" else s.sql_url if s.backend == "sql" else \
             s.neo4j_uri if s.backend == "neo4j" else "in memory (not saved)"
         cfg = os.path.basename(s.config_file) if s.config_file else "no config file (defaults)"
+        role = f" ({self.role})" if self.user is not None else ""
         label = QLabel(f"Backend: <b>{s.backend}</b> – {where} &nbsp;|&nbsp; Config: {cfg} &nbsp;|&nbsp; "
-                       f"User: <b>{self.svc.actor}</b>")
+                       f"User: <b>{self.svc.actor}</b>{role}")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.statusBar().addWidget(label)
 
@@ -142,16 +152,27 @@ class MainWindow(QMainWindow):
             guarded(self, lambda: seed_demo(self.svc))
             self.refresh_all()
 
+    def _apply_role(self) -> None:
+        """Viewers see everything but cannot change it; data-wide actions need admin."""
+        can_edit = self.role in ("editor", "admin")
+        for page in self.pages:
+            page.can_edit = can_edit
+            for b in page.edit_buttons:
+                b.setEnabled(can_edit)
+        for action in self.admin_actions:
+            action.setEnabled(self.role == "admin")
+
     def open_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open riskmesh.toml", "", "RiskMesh config (*.toml)")
         if not path:
             return
         settings = guarded(self, lambda: load_settings(path))
         if settings:
-            new = MainWindow(settings)
-            new.show()
-            self._replacement = new  # keep a reference
-            self.close()
+            new = open_window(settings, self)
+            if new:
+                new.show()
+                self._replacement = new  # keep a reference
+                self.close()
 
     def show_config(self) -> None:
         lines = [f"<tr><td>{k}</td><td><b>{v}</b></td></tr>" for k, v in self.settings.public().items()]
@@ -160,6 +181,31 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self.svc.repo.close()
         super().closeEvent(event)
+
+
+def open_window(settings: Settings, parent=None) -> Optional[MainWindow]:
+    """
+    Opens the service and, when login is enabled, asks for a local RiskMesh
+    account first. Note: the desktop app works directly on the database, so
+    the login decides who is recorded in the audit log and what the window
+    allows - it does not protect a database file the user can open anyway.
+    Returns None if the user cancels.
+    """
+    svc = make_service(settings, source="gui")
+    user = None
+    if settings.auth_mode != "none":
+        if not [u for u in svc.list_users() if u.auth_source == "local" and u.active]:
+            QMessageBox.warning(parent, "RiskMesh", "Login is enabled, but there is no local RiskMesh account.\n\n"
+                                "Create one with:  riskmesh users create-admin <name>\n"
+                                "(Single sign-on accounts can only be used in the web app.)")
+            svc.repo.close()
+            return None
+        dialog = LoginDialog(svc, parent)
+        if not dialog.exec():
+            svc.repo.close()
+            return None
+        user = dialog.user
+    return MainWindow(settings, svc, user)
 
 
 def create_window(settings: Optional[Settings] = None) -> MainWindow:

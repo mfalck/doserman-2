@@ -8,6 +8,7 @@ the JSON, SQL and Neo4j backends, and it knows nothing about HTTP or GUIs.
 """
 
 import copy
+import functools
 import logging
 import typing
 from collections import Counter, defaultdict
@@ -18,11 +19,13 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
 from ..domain import analytic, audit, risk_model
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
-from ..domain.models import (AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
+from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
+                             VERIFIED_TYPES, ApiToken, User,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REFERENCES, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, Asset, AuditEntry, BusinessUnit, Control, ControlEvent, Entity,
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
+from .users import USER_WRITE_METHODS, UserAdmin
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +53,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService:
+class RiskService(UserAdmin):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -62,6 +65,7 @@ class RiskService:
         self.reason: Optional[str] = None
         self._last_audit_ts: Optional[datetime] = None
         self._head: Optional[Tuple[int, str]] = None  # (seq, hash) of the latest audit entry
+        self._tx_depth = 0
 
     @contextmanager
     def context(self, actor: Optional[str] = None, source: Optional[str] = None, reason: Optional[str] = None):
@@ -90,8 +94,7 @@ class RiskService:
 
     def _chain_head(self) -> Tuple[int, str]:
         if self._head is None:
-            entries = self.repo.list(AuditEntry)
-            last = max(entries, key=lambda e: e.seq, default=None)
+            last = self.repo.latest(AuditEntry, "seq")
             self._head = (last.seq, last.hash) if last else (0, audit.GENESIS)
         return self._head
 
@@ -178,10 +181,73 @@ class RiskService:
         self._remove(entity)
 
     def reset_all(self) -> None:
-        """Deletes ALL data including the audit log (demo/testing). The chain starts again."""
+        """
+        Deletes all risk data, runs and the audit log (demo/testing); the chain
+        starts again. Users and their tokens are kept (otherwise nobody could log
+        in afterwards) and are recorded at the start of the new chain.
+        """
+        users, tokens = self.repo.list(User), self.repo.list(ApiToken)
         self.repo.clear()
         self._head = None
         self._last_audit_ts = None
+        for t in tokens:
+            self.repo.save(t)
+        for u in users:
+            self._save(u, "CREATE", details=f"{u.username} (kept when the data was reset)", stamp=False)
+
+    # =====================================================================
+    # Backup and restore (everything, including the audit trail)
+    # =====================================================================
+
+    def backup_data(self) -> Dict[str, Any]:
+        """
+        A complete copy: risk data, audit trail, runs, users and token hashes.
+        Unlike export_data() it can rebuild a system with its history intact,
+        also on a different backend. Contains password and token hashes: keep
+        backups as confidential as the database itself.
+        """
+        content = {cls.kind: [e.to_dict() for e in self.repo.list(cls)] for cls in ENTITY_TYPES}
+        head = self.repo.latest(AuditEntry, "seq")
+        return {
+            "format": "riskmesh-backup",
+            "format_version": 1,
+            "package_version": _package_version(),
+            "created_at": _now(),
+            "audit_head_seq": head.seq if head else 0,
+            "audit_head_hash": head.hash if head else audit.GENESIS,
+            "content_sha256": audit.sha256(content),
+            "content": content,
+        }
+
+    def restore_data(self, backup: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+        """
+        Restores a backup into this (empty) storage exactly as it was, then
+        verifies the audit chain. With force=True existing data is deleted first.
+        """
+        if backup.get("format") != "riskmesh-backup":
+            raise ValidationError("Not a RiskMesh backup file (use import for exports).")
+        content = backup.get("content") or {}
+        if audit.sha256(content) != backup.get("content_sha256"):
+            raise ValidationError("The backup file is damaged or was modified (checksum mismatch).")
+        with self.repo.transaction():
+            if any(self.repo.list(cls) for cls in ENTITY_TYPES):
+                if not force:
+                    raise ConflictError("The target storage is not empty; restore with force=True to replace it.")
+                self.repo.clear()
+            counts = {}
+            for cls in ENTITY_TYPES:
+                rows = content.get(cls.kind, [])
+                for row in rows:
+                    self.repo.save(cls.from_dict(row))
+                counts[cls.kind] = len(rows)
+            self._head = None
+            self._last_audit_ts = None
+        result = self.verify_audit()
+        if result["head_hash"] != backup.get("audit_head_hash"):
+            result["ok"] = False
+            result["chain_errors"].append({"seq": result["head_seq"],
+                                           "error": "restored chain head differs from the backup's head"})
+        return {"restored": counts, "verification": result}
 
     # =====================================================================
     # Audit verification
@@ -217,7 +283,7 @@ class RiskService:
                 if e.entity_id and e.action in ("CREATE", "UPDATE", "DELETE"):
                     latest[(e.entity_type, e.entity_id)] = e
             seen = set()
-            for cls in DATA_TYPES:
+            for cls in VERIFIED_TYPES:
                 for entity in self.repo.list(cls):
                     key = (cls.kind, entity.id)
                     seen.add(key)
@@ -226,7 +292,7 @@ class RiskService:
                         error = "not in the audit log"
                     elif last.action == "DELETE":
                         error = "deleted according to the audit log, but still present"
-                    elif last.state_hash != audit.state_hash(entity):
+                    elif last.state_hash not in (audit.state_hash(entity), audit.legacy_state_hash(entity)):
                         error = "changed outside RiskMesh (differs from the last audited state)"
                     else:
                         continue
@@ -723,18 +789,24 @@ class RiskService:
             report = self.simulation_report(n_trials, seed, residual, unit_id, engine)
         duration = (datetime.now(timezone.utc) - started).total_seconds() * 1000
 
+        run = self._store_run(fingerprint, mode, engine, params, report, round(duration, 1), label)
+        return {**report, "run": self.run_meta(run, cached=False, fingerprint=fingerprint)}
+
+    def _store_run(self, fingerprint: str, mode: str, engine: str, params: Dict[str, Any],
+                   report: Dict[str, Any], duration_ms: float, label: Optional[str]) -> AnalysisRun:
+        """Writes the run (under the write lock; the calculation itself ran outside it)."""
         head_seq, head_hash = self._chain_head()
-        runs = self.repo.list(AnalysisRun)
-        run = AnalysisRun(number=max((r.number for r in runs), default=0) + 1, fingerprint=fingerprint,
+        last = self.repo.latest(AnalysisRun, "number")
+        run = AnalysisRun(number=(last.number if last else 0) + 1, fingerprint=fingerprint,
                           mode=mode, engine=engine, params=params, report=report, created_by=self.actor,
                           package_version=_package_version(), audit_seq=head_seq, audit_hash=head_hash,
-                          duration_ms=round(duration, 1), label=label or None)
+                          duration_ms=duration_ms, label=label or None)
         run.created_at = run.updated_at = _now()
         self.repo.save(run)
         self._audit("RUN", run.kind, run.id,
                     f"run #{run.number}: {mode} {engine}" + (f" '{label}'" if label else ""),
                     changes={"fingerprint": [None, fingerprint]})
-        return {**report, "run": self.run_meta(run, cached=False, fingerprint=fingerprint)}
+        return run
 
     def run_meta(self, run: AnalysisRun, cached: Optional[bool] = None,
                   fingerprint: Optional[str] = None) -> Dict[str, Any]:
@@ -971,3 +1043,42 @@ class RiskService:
         self._audit("IMPORT", "data", None,
                     ("replace " if replace else "merge ") + ", ".join(f"{v} {k}" for k, v in counts.items() if v))
         return counts
+
+
+# ---------------------------------------------------------------------------
+# Write operations run in one storage transaction holding the write lock.
+# The audit chain head is re-read under the lock, so several processes (API
+# workers, GUI, CLI) on the same database append to one linear chain, and a
+# failed operation leaves neither half-saved data nor a dangling audit entry.
+# ---------------------------------------------------------------------------
+
+WRITE_METHODS = (
+    "create_business_unit", "update_business_unit", "delete_business_unit", "assign_risk_owner",
+    "add_delegate", "remove_delegate", "create_asset", "update_asset", "delete_asset",
+    "create_person", "update_person", "delete_person", "create_risk", "update_risk", "delete_risk",
+    "create_control", "update_control", "delete_control", "create_risk_event", "update_risk_event",
+    "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
+    "import_data", "label_run", "reset_all", "_store_run",
+) + USER_WRITE_METHODS
+
+
+def _write(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if self._tx_depth:  # already inside a write (nested call)
+            return method(self, *args, **kwargs)
+        with self.repo.transaction():
+            self._tx_depth += 1
+            self._head = None  # another process may have appended: re-read under the lock
+            try:
+                return method(self, *args, **kwargs)
+            except BaseException:
+                self._head = None  # the transaction is rolled back, so is our view of the chain
+                raise
+            finally:
+                self._tx_depth -= 1
+    return wrapper
+
+
+for _name in WRITE_METHODS:
+    setattr(RiskService, _name, _write(getattr(RiskService, _name)))

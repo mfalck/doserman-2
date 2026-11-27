@@ -78,7 +78,9 @@ Environment variables override the file (PowerShell: `$env:NAME = "value"`):
 | `RISKMESH_JSON_PATH` | data file for the JSON backend | `riskmesh_data.json` |
 | `RISKMESH_SQL_URL` | SQLAlchemy URL, e.g. `postgresql+psycopg://user:pw@host/db` | `sqlite:///riskmesh.db` |
 | `RISKMESH_NEO4J_URI` / `_USER` / `_PASSWORD` / `_DATABASE` | Neo4j connection | `neo4j://localhost:7687`, `neo4j` |
-| `RISKMESH_API_KEY` | if set, API requests need header `X-API-Key` | off |
+| `RISKMESH_API_KEY` | shared key for the API when `auth.mode = "none"` (header `X-API-Key`) | off |
+| `RISKMESH_AUTH_MODE` | `none`, `local`, `oidc` or `local+oidc` | `none` |
+| `RISKMESH_ADMIN_USER` / `_PASSWORD` | create the first admin when the API starts and there are no users | |
 | `RISKMESH_CORS_ORIGINS` | comma-separated origins allowed to call the API | none |
 
 Credentials live only in the environment of the server, never in code or in
@@ -248,8 +250,84 @@ $env:RISKMESH_CORS_ORIGINS = "https://doserman.lovable.app"
 py -m riskmesh serve
 ```
 
-For use by others the API must be hosted somewhere reachable (not localhost)
-and protected (`RISKMESH_API_KEY` as a minimum, real user login later).
+For use by others, host the API (see *Running a server*) and turn on login.
+
+## Users, roles and login
+
+Set `[auth] mode` in `riskmesh.toml` (or `RISKMESH_AUTH_MODE`):
+
+| mode | |
+|---|---|
+| `none` | no login (default): for one person on their own machine; the API is open to anyone who can reach it |
+| `local` | RiskMesh accounts with passwords (scrypt-hashed) |
+| `oidc` | single sign-on via Microsoft Entra ID or any OpenID Connect provider |
+| `local+oidc` | both |
+
+Roles: **viewer** (see everything, run analyses), **editor** (also change
+risks, controls, events, assets, organisation), **admin** (also users, API
+tokens, and replacing all data on import). There is always at least one admin.
+
+```powershell
+py -m riskmesh users create-admin martin        # asks for a password
+py -m riskmesh users create anna --role editor
+py -m riskmesh users token reportbot --name "Power BI"   # API token for scripts, shown once
+```
+
+Clients send `Authorization: Bearer <token>`: a login session from
+`POST /api/auth/login` (expires after `session_hours`) or an API token. The
+audit log records the authenticated user - a client can no longer choose the
+name. Five wrong passwords lock that username for a minute. Admins manage users
+in the web app (*Users*) or via `/api/users`.
+
+**Single sign-on (Entra ID).** Register an app in Entra ID with the redirect
+URI `https://<your-api>/api/auth/oidc/callback`, create app roles
+`RiskMesh.Admin`, `RiskMesh.Editor`, `RiskMesh.Viewer`, assign them, and fill
+in `[auth.oidc]` (issuer `https://login.microsoftonline.com/<tenant>/v2.0`,
+`client_id`, the client secret in `RISKMESH_OIDC_CLIENT_SECRET`,
+`frontend_url`). Users are created on first sign-in and their role follows the
+claims on every login. The API handles the code exchange (with PKCE), so the
+client secret never reaches the browser.
+
+**Desktop app.** With login enabled it asks for a local account. It works
+directly on the database, so its login decides who is recorded and what the
+window allows; it is not a barrier for someone who can open the database file.
+Single-sign-on accounts are for the web app.
+
+## Running a server
+
+```powershell
+copy .env.example .env      # set POSTGRES_PASSWORD and RISKMESH_ADMIN_PASSWORD
+docker compose up -d --build
+```
+
+This starts PostgreSQL, the API (two worker processes, login on, first admin
+from `RISKMESH_ADMIN_USER`/`RISKMESH_ADMIN_PASSWORD`) and a nightly `pg_dump`
+into `./backups` (30 days kept). Extra settings go in `./config/riskmesh.toml`.
+Put a TLS-terminating reverse proxy (Caddy, nginx, Azure App Gateway, ...) in
+front before exposing it to the internet.
+
+**Several users at once.** With the SQL backend any number of API workers,
+desktop apps and CLI sessions can work on the same database: every change runs
+in one transaction that holds the database's write lock, so data and the audit
+chain stay consistent (tested with parallel processes on SQLite and
+PostgreSQL). The JSON file backend is for one process: a second one gets a
+clear "in use" error instead of overwriting changes.
+
+**Upgrades.** On start-up the SQL backend creates new tables and adds new
+columns automatically and records the schema version; a database written by a
+newer RiskMesh is refused. Data in JSON files and Neo4j picks up new fields
+with their defaults.
+
+**Backups.** Besides database dumps:
+
+```powershell
+py -m riskmesh backup riskmesh-backup.json      # everything: data, audit trail, runs, users
+py -m riskmesh restore riskmesh-backup.json     # into empty storage; verifies the audit chain
+```
+
+A RiskMesh backup can be restored on a different backend (e.g. JSON to
+PostgreSQL) with the audit chain intact. It contains password and token
+hashes: keep it as confidential as the database.
 
 ## License
 

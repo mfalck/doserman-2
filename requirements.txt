@@ -4,6 +4,7 @@ scipy>=1.11
 # presentation: REST API
 fastapi>=0.110
 uvicorn[standard]>=0.29
+PyJWT[crypto]>=2.8
 # storage backends (only needed for the backend you use)
 sqlalchemy>=2.0
 neo4j>=5.0

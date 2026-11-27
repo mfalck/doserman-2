@@ -18,3 +18,60 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m pyflakes riskmesh tests
       - run: python -m pytest -q
+
+  # The same test suite against real PostgreSQL and Neo4j servers.
+  databases:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: riskmesh_test
+          POSTGRES_USER: riskmesh
+          POSTGRES_PASSWORD: ci-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U riskmesh -d riskmesh_test" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/ci-password-123
+        ports: ["7687:7687"]
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p ci-password-123 'RETURN 1'" --health-interval 10s
+          --health-timeout 10s --health-retries 30
+    env:
+      RISKMESH_TEST_POSTGRES_URL: postgresql+psycopg://riskmesh:ci-password@localhost:5432/riskmesh_test
+      RISKMESH_TEST_NEO4J_URI: bolt://localhost:7687
+      RISKMESH_TEST_NEO4J_USER: neo4j
+      RISKMESH_TEST_NEO4J_PASSWORD: ci-password-123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,postgres]"
+      - run: python -m pytest -q -k "postgres or neo4j"
+
+  # The container image builds, starts with PostgreSQL, and a login works.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the compose stack
+        run: |
+          printf 'POSTGRES_PASSWORD=ci-db-password\nRISKMESH_ADMIN_PASSWORD=ci-admin-password\n' > .env
+          docker compose up -d --build --wait --wait-timeout 180 db api
+      - name: Log in and call the API
+        run: |
+          curl -fsS http://localhost:8000/health
+          token=$(curl -fsS -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"ci-admin-password"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+          curl -fsS -X POST http://localhost:8000/api/business-units -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' -d '{"name":"CI"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/risks)" = "401"
+          curl -fsS http://localhost:8000/api/audit-log/verify -H "Authorization: Bearer $token" | grep '"ok":true'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs

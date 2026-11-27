@@ -8,6 +8,7 @@ written as integers because some backends return 400000 as 400000.0.
 
 import hashlib
 import json
+from dataclasses import MISSING, fields
 from typing import Any, Dict, Optional
 
 from .models import AuditEntry, Entity
@@ -33,19 +34,49 @@ def sha256(value: Any) -> str:
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
+def _without_defaults(entity: Entity) -> Dict[str, Any]:
+    data = entity.to_dict()
+    for f in fields(entity):
+        if f.default is not MISSING:
+            default = f.default
+        elif f.default_factory is not MISSING:
+            default = f.default_factory()
+        else:
+            continue
+        if f.name != "id" and canonical(data.get(f.name)) == canonical(default):
+            data.pop(f.name, None)
+    return data
+
+
 def state_hash(entity: Optional[Entity]) -> Optional[str]:
-    """Fingerprint of an entity's stored state."""
+    """
+    Fingerprint of an entity's stored state. Fields that hold their default
+    value are left out, so adding a new field to the model (whose existing
+    rows get the default) does not change the fingerprint of existing data.
+    """
+    return sha256(_without_defaults(entity)) if entity is not None else None
+
+
+def legacy_state_hash(entity: Optional[Entity]) -> Optional[str]:
+    """Fingerprint used before RiskMesh 0.2 (all fields); still accepted by verify."""
     return sha256(entity.to_dict()) if entity is not None else None
 
 
+# The fields covered by an entry's hash. Frozen: adding a field to AuditEntry
+# must not change the hash of existing entries (it would break every chain).
+# A future field that needs protecting gets a new list plus a hash version.
+HASHED_FIELDS_V1 = ("id", "created_at", "updated_at", "action", "entity_type", "entity_id", "details",
+                    "user_id", "timestamp", "seq", "source", "reason", "changes", "state_hash", "prev_hash")
+
+
 def entry_hash(entry: AuditEntry) -> str:
-    """Hash of an audit entry: every field except `hash` itself."""
+    """Hash of an audit entry over HASHED_FIELDS_V1 (everything except `hash` itself)."""
     data: Dict[str, Any] = entry.to_dict()
-    data.pop("hash", None)
-    return sha256(data)
+    return sha256({k: data.get(k) for k in HASHED_FIELDS_V1})
 
 
-IGNORED_IN_DIFF = {"updated_at"}  # changes on every save; covered by state_hash
+IGNORED_IN_DIFF = {"updated_at"}
+SECRET_FIELDS = {"password_hash", "token_hash"}  # changes on every save; covered by state_hash
 
 
 def diff(before: Optional[Entity], after: Optional[Entity]) -> Dict[str, list]:
@@ -58,5 +89,7 @@ def diff(before: Optional[Entity], after: Optional[Entity]) -> Dict[str, list]:
             continue
         old, new = b.get(key), a.get(key)
         if canonical(old) != canonical(new):
+            if key in SECRET_FIELDS:  # never copy password/token hashes into the audit log
+                old, new = ("***" if old else None), ("***" if new else None)
             out[key] = [old, new]
     return out

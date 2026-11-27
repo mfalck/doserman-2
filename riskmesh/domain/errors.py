@@ -15,3 +15,11 @@ class NotFoundError(DomainError, LookupError):
 
 class ConflictError(DomainError):
     """The change conflicts with existing data, e.g. a duplicate name (HTTP 409)."""
+
+
+class AuthenticationError(DomainError):
+    """Not logged in, wrong credentials or expired token (HTTP 401)."""
+
+
+class PermissionDenied(DomainError):
+    """Logged in, but the role does not allow this (HTTP 403)."""

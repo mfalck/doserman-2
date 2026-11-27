@@ -55,5 +55,7 @@ def test_delete_and_clear(repo):
 def test_json_file_persists_between_instances(tmp_path):
     path = str(tmp_path / "d.json")
     p = Person(name="Persisted")
-    JsonRepository(path).save(p)
-    assert JsonRepository(path).get(Person, p.id) == p
+    with JsonRepository(path) as first:
+        first.save(p)
+    with JsonRepository(path) as second:
+        assert second.get(Person, p.id) == p

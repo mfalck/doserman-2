@@ -13,11 +13,15 @@ in Cypher, e.g. (:Risk)-[:BELONGS_TO]->(:BusinessUnit),
 """
 
 import json
+import threading
+from contextlib import contextmanager
 from dataclasses import fields
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Iterator, List, Optional, Type
 
 from ..domain.models import ENTITY_TYPES, REFERENCES, Entity
-from .base import E, Repository
+from .base import E, Repository, StorageError
+
+SCHEMA_VERSION = 1  # properties are schemaless; missing ones get the model default when read
 
 LABELS: Dict[Type[Entity], str] = {cls: cls.__name__ for cls in ENTITY_TYPES}
 
@@ -37,16 +41,49 @@ class Neo4jRepository(Repository):
 
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.database = database
-        self.driver.verify_connectivity()
+        self._local = threading.local()
+        try:
+            self.driver.verify_connectivity()
+        except Exception as e:
+            raise StorageError(f"Cannot connect to Neo4j at {uri}: {e}") from e
         for label in LABELS.values():
             self._run(f"CREATE CONSTRAINT {label.lower()}_id IF NOT EXISTS "
                       f"FOR (n:{label}) REQUIRE n.id IS UNIQUE")
+        self._run("CREATE CONSTRAINT auditentry_seq IF NOT EXISTS FOR (n:AuditEntry) REQUIRE n.seq IS UNIQUE")
+        self._run("MERGE (m:RiskMeshMeta {key: 'schema_version'}) SET m.value = $v", v=SCHEMA_VERSION)
 
     # -- helpers ----------------------------------------------------------
 
     def _run(self, query: str, **params: Any):
+        tx = getattr(self._local, "tx", None)
+        if tx is not None:
+            return list(tx.run(query, params))
         records, _, _ = self.driver.execute_query(query, params, database_=self.database)
         return records
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Explicit transaction; updating the lock node serialises writers across processes."""
+        if getattr(self._local, "tx", None) is not None:
+            yield
+            return
+        session = self.driver.session(database=self.database)
+        tx = session.begin_transaction()
+        self._local.tx = tx
+        try:
+            tx.run("MERGE (l:RiskMeshLock {id: 1}) SET l.n = coalesce(l.n, 0) + 1").consume()
+            yield
+            tx.commit()
+        except BaseException:
+            tx.rollback()
+            raise
+        finally:
+            self._local.tx = None
+            session.close()
+
+    def latest(self, cls: Type[E], field: str) -> Optional[E]:
+        records = self._run(f"MATCH (n:{LABELS[cls]}) RETURN properties(n) AS p ORDER BY n.{field} DESC LIMIT 1")
+        return self._from_props(cls, records[0]["p"]) if records else None
 
     def _to_props(self, entity: Entity) -> Dict[str, Any]:
         props = entity.to_dict()

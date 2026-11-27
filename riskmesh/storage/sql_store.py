@@ -1,23 +1,42 @@
 """
-Relational backend via SQLAlchemy (SQLite, PostgreSQL, SQL Server, ...).
+Relational backend via SQLAlchemy (SQLite, PostgreSQL, ...).
 
 Tables are generated from the domain dataclasses: str -> VARCHAR/TEXT,
 int/float -> INTEGER/FLOAT, list/dict fields -> JSON columns.
 No foreign keys on purpose: referential rules and cascades live in the
 service layer, so every backend behaves identically.
 
-Note: `create_all` creates missing tables but does not add new columns to
-existing ones. After a model change, migrate with export -> new DB -> import.
+Schema migrations: on start-up missing tables are created and missing
+columns are added (new model fields are always nullable, so this is safe);
+the schema version is kept in `riskmesh_meta`, and a database written by a
+newer RiskMesh is refused instead of being damaged. Changes that are not
+additive get a numbered function in MIGRATIONS.
+
+Concurrency: a write transaction first updates the single row in
+`riskmesh_lock`. That takes the database's write lock (SQLite) or a row lock
+(PostgreSQL), so writers from any number of processes are serialised and
+the audit chain stays linear. Readers are not blocked by it on PostgreSQL.
 """
 
+import logging
+import threading
 import typing
-from typing import Any, Dict, List, Optional, Type
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, Iterator, List, Optional, Type
 
-from sqlalchemy import (JSON, Column, Float, Index, Integer, MetaData, String, Table, Text, create_engine, delete,
-                        insert, select, text)
+from sqlalchemy import (JSON, Boolean, Column, Float, Index, Integer, MetaData, String, Table, Text, create_engine, delete,
+                        inspect, insert, select, text, update)
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import OperationalError
 
-from ..domain.models import ENTITY_TYPES, AuditEntry, Entity
-from .base import E, Repository
+from ..domain.models import ENTITY_TYPES, ApiToken, AuditEntry, Entity, User
+from .base import E, Repository, StorageError
+
+log = logging.getLogger(__name__)
+
+SCHEMA_VERSION = 1
+# Non-additive migrations: {version: function(connection)}, run in order when upgrading.
+MIGRATIONS: Dict[int, Callable[[Connection], None]] = {}
 
 metadata = MetaData()
 LONG_TEXT = {"description", "details", "impact_description"}
@@ -31,6 +50,8 @@ def _column(name: str, hint: Any) -> Column:
         return Column("id", String(64), primary_key=True)
     if origin in (list, dict, List, Dict):
         col_type = JSON
+    elif base is bool:
+        col_type = Boolean
     elif base is float:
         col_type = Float
     elif base is int:
@@ -40,7 +61,8 @@ def _column(name: str, hint: Any) -> Column:
     else:
         col_type = String(255)
     indexed = name.endswith("_id") and origin not in (list, dict)
-    return Column(name, col_type, nullable=optional or origin in (list, dict), index=indexed)
+    # every column is nullable so that new fields can always be added to existing tables
+    return Column(name, col_type, nullable=True, index=indexed)
 
 
 def _table(cls: Type[Entity]) -> Table:
@@ -52,6 +74,10 @@ TABLES: Dict[Type[Entity], Table] = {cls: _table(cls) for cls in ENTITY_TYPES}
 AUDIT = TABLES[AuditEntry]
 # one entry per sequence number: two writers can never both append entry n
 Index("ux_audit_seq", AUDIT.c.seq, unique=True)
+Index("ux_user_username", TABLES[User].c.username, unique=True)
+Index("ux_token_hash", TABLES[ApiToken].c.token_hash, unique=True)
+META = Table("riskmesh_meta", metadata, Column("key", String(64), primary_key=True), Column("value", String(255)))
+LOCK = Table("riskmesh_lock", metadata, Column("id", Integer, primary_key=True), Column("n", Integer))
 
 # The audit table is append-only: the database itself refuses UPDATE and DELETE.
 _PROTECT = {
@@ -61,7 +87,7 @@ _PROTECT = {
         f"CREATE TRIGGER IF NOT EXISTS {AUDIT.name}_no_delete BEFORE DELETE ON {AUDIT.name} "
         "BEGIN SELECT RAISE(ABORT, 'audit log is append-only'); END",
     ],
-    "postgresql": [  # not yet tested against a PostgreSQL server
+    "postgresql": [
         "CREATE OR REPLACE FUNCTION riskmesh_audit_append_only() RETURNS trigger AS $$ "
         "BEGIN RAISE EXCEPTION 'audit log is append-only'; END; $$ LANGUAGE plpgsql",
         f"DROP TRIGGER IF EXISTS {AUDIT.name}_append_only ON {AUDIT.name}",
@@ -74,19 +100,95 @@ _PROTECT = {
 class SqlRepository(Repository):
 
     def __init__(self, url: str = "sqlite:///riskmesh.db", echo: bool = False):
-        self.engine = create_engine(url, echo=echo, future=True)
-        metadata.create_all(self.engine)
-        self._protect_audit()
+        kwargs: Dict[str, Any] = {"echo": echo, "future": True}
+        if url.startswith("sqlite"):
+            kwargs["connect_args"] = {"timeout": 30}  # wait for another writer instead of failing at once
+        try:
+            self.engine = create_engine(url, **kwargs)
+            self._local = threading.local()
+            self._migrate()
+        except OperationalError as e:
+            raise StorageError(f"Cannot open the database {self.engine.url.render_as_string(hide_password=True)}: "
+                               f"{e.orig}") from e
 
-    def _protect_audit(self) -> None:
-        statements = _PROTECT.get(self.engine.dialect.name, [])
+    # -- schema --------------------------------------------------------------
+
+    def _migrate(self) -> None:
         with self.engine.begin() as conn:
-            for sql in statements:
-                conn.execute(text(sql))
+            metadata.create_all(conn)
+            row = conn.execute(select(META.c.value).where(META.c.key == "schema_version")).first()
+            current = int(row[0]) if row else SCHEMA_VERSION
+            if current > SCHEMA_VERSION:
+                raise StorageError(f"The database uses schema version {current}, but this RiskMesh only knows "
+                                   f"version {SCHEMA_VERSION}. Upgrade RiskMesh before using this database.")
+            self._add_missing_columns(conn)
+            for version in range(current + 1, SCHEMA_VERSION + 1):
+                if version in MIGRATIONS:
+                    log.info("Migrating database to schema version %s", version)
+                    MIGRATIONS[version](conn)
+            conn.execute(delete(META).where(META.c.key == "schema_version"))
+            conn.execute(insert(META).values(key="schema_version", value=str(SCHEMA_VERSION)))
+            if conn.execute(select(LOCK.c.id)).first() is None:
+                conn.execute(insert(LOCK).values(id=1, n=0))
+            self._protect_audit(conn)
+
+    def _add_missing_columns(self, conn: Connection) -> None:
+        inspector = inspect(conn)
+        for table in TABLES.values():
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in existing:
+                    ddl = f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {col.type.compile(conn.dialect)}'
+                    log.info("Adding column %s.%s", table.name, col.name)
+                    conn.execute(text(ddl))
+
+    def _protect_audit(self, conn: Connection) -> None:
+        for sql in _PROTECT.get(conn.dialect.name, []):
+            conn.execute(text(sql))
+
+    def schema_version(self) -> int:
+        with self._read() as conn:
+            row = conn.execute(select(META.c.value).where(META.c.key == "schema_version")).first()
+        return int(row[0]) if row else 0
+
+    # -- connections -----------------------------------------------------------
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        if getattr(self._local, "conn", None) is not None:
+            yield  # re-entrant
+            return
+        with self.engine.begin() as conn:
+            conn.execute(update(LOCK).where(LOCK.c.id == 1).values(n=LOCK.c.n + 1))  # take the write lock
+            self._local.conn = conn
+            try:
+                yield
+            finally:
+                self._local.conn = None
+
+    @contextmanager
+    def _read(self) -> Iterator[Connection]:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            yield conn
+        else:
+            with self.engine.connect() as c:
+                yield c
+
+    @contextmanager
+    def _write(self) -> Iterator[Connection]:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            yield conn
+        else:
+            with self.engine.begin() as c:
+                yield c
+
+    # -- Repository API ----------------------------------------------------------
 
     def get(self, cls: Type[E], entity_id: str) -> Optional[E]:
         table = TABLES[cls]
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             row = conn.execute(select(table).where(table.c.id == entity_id)).mappings().first()
         return cls.from_dict(dict(row)) if row else None
 
@@ -95,31 +197,37 @@ class SqlRepository(Repository):
         stmt = select(table)
         for key, value in filters.items():
             stmt = stmt.where(table.c[key].is_(None) if value is None else table.c[key] == value)
-        with self.engine.connect() as conn:
+        with self._read() as conn:
             rows = conn.execute(stmt).mappings().all()
         return [cls.from_dict(dict(r)) for r in rows]
 
+    def latest(self, cls: Type[E], field: str) -> Optional[E]:
+        table = TABLES[cls]
+        with self._read() as conn:
+            row = conn.execute(select(table).order_by(table.c[field].desc()).limit(1)).mappings().first()
+        return cls.from_dict(dict(row)) if row else None
+
     def save(self, entity: Entity) -> None:
         table = TABLES[type(entity)]
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             if table is not AUDIT:  # audit entries are only ever inserted
                 conn.execute(delete(table).where(table.c.id == entity.id))
             conn.execute(insert(table).values(**entity.to_dict()))
 
     def delete(self, cls: Type[Entity], entity_id: str) -> bool:
         table = TABLES[cls]
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             return conn.execute(delete(table).where(table.c.id == entity_id)).rowcount > 0
 
     def clear(self) -> None:
         """Deletes everything. The append-only audit table can only be emptied by dropping it."""
-        with self.engine.begin() as conn:
+        with self._write() as conn:
             for table in TABLES.values():
                 if table is not AUDIT:
                     conn.execute(delete(table))
-        AUDIT.drop(self.engine, checkfirst=True)
-        AUDIT.create(self.engine)
-        self._protect_audit()
+            AUDIT.drop(conn, checkfirst=True)
+            AUDIT.create(conn)
+            self._protect_audit(conn)
 
     def close(self) -> None:
         self.engine.dispose()

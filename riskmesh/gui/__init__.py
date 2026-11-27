@@ -19,16 +19,18 @@ def main(settings: Optional[Settings] = None, argv: Optional[List[str]] = None) 
     except ImportError:
         print('The desktop GUI needs PySide6:  pip install "riskmesh[gui]"', file=sys.stderr)
         return 1
-    from .app import MainWindow
+    from .app import open_window
 
     app = QApplication.instance() or QApplication(argv or sys.argv[:1])
     app.setApplicationName("RiskMesh")
     app.setStyle("Fusion")
     try:
-        window = MainWindow(settings or load_settings())
+        window = open_window(settings or load_settings())
     except Exception as e:  # configuration or database problems: show them instead of a traceback
         QMessageBox.critical(None, "RiskMesh", f"Could not start:\n\n{e}")
         return 1
+    if window is None:
+        return 0
     window.show()
     return app.exec()
 

@@ -5,7 +5,7 @@ Relations are stored as IDs on the referring side (see REFERENCES), so every
 backend can persist them the same way and the service layer can check them.
 """
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from typing import Any, ClassVar, Dict, List, Optional
 from uuid import uuid4
 
@@ -34,8 +34,19 @@ class Entity:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]):
-        names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in names})
+        """
+        Builds the entity from stored data. Unknown keys are ignored; missing
+        or null values of fields with a default get that default. That is what
+        makes adding a field to the model a safe, automatic migration for data
+        written by an older version (JSON file, Neo4j node, new SQL column).
+        """
+        values = {}
+        for f in fields(cls):
+            if f.name in data and data[f.name] is not None:
+                values[f.name] = data[f.name]
+            elif f.name in data and f.default is MISSING and f.default_factory is MISSING:
+                values[f.name] = None  # required field stored as null: let validation report it
+        return cls(**values)
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -183,9 +194,45 @@ class AnalysisRun(Entity):
     label: Optional[str] = None      # e.g. "Board meeting 2026-12-01"
 
 
+ROLES = ("viewer", "editor", "admin")  # each role includes the rights of the ones before it
+
+
+@dataclass
+class User(Entity):
+    """
+    Someone who can log in. Local users have a password (scrypt hash);
+    single-sign-on users (auth_source "oidc") are created on first login and
+    identified by external_id = "<issuer>|<subject>".
+    """
+    kind: ClassVar[str] = "user"
+    username: str
+    role: str = "viewer"
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    active: bool = True
+    auth_source: str = "local"
+    external_id: Optional[str] = None
+    password_hash: Optional[str] = None
+
+
+@dataclass
+class ApiToken(Entity):
+    """A login session or a long-lived API key. Only the SHA-256 of the token is stored."""
+    kind: ClassVar[str] = "api_token"
+    user_id: str
+    token_hash: str
+    token_type: str = "session"   # "session" (expires) or "api" (for scripts)
+    name: Optional[str] = None
+    expires_at: Optional[str] = None
+    last_used_at: Optional[str] = None
+    revoked: bool = False
+
+
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Risk, Control, RiskEvent, ControlEvent)
-ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun)
+ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken)
+# entities whose stored state verify_audit() compares with the audit trail
+VERIFIED_TYPES = DATA_TYPES + (User,)
 
 # (from type, field, to type, field is a list, graph relationship name)
 REFERENCES = [

@@ -1,5 +1,6 @@
 """The pages of the main window. Each has refresh(); the window calls it after any change."""
 
+import functools
 import json
 from typing import Any, Callable, Dict, Optional
 
@@ -22,6 +23,8 @@ class Page(QWidget):
         self.svc = svc
         self.on_change = on_change  # tell the window that data changed (refreshes all pages)
         self.layout_ = QVBoxLayout(self)
+        self.can_edit = True        # set by the window from the signed-in user's role
+        self.edit_buttons: list = []
 
     def refresh(self) -> None:
         raise NotImplementedError
@@ -100,6 +103,7 @@ class OrganisationPage(Page):
                            ("Delete", self.delete)):
             b = QPushButton(text)
             b.clicked.connect(slot)
+            self.edit_buttons.append(b)
             buttons.addWidget(b)
         buttons.addStretch()
         self.layout_.addLayout(buttons)
@@ -195,6 +199,7 @@ class RisksPage(Page):
         for text, slot in (("New risk", self.add), ("Edit", self.edit), ("Delete", self.delete)):
             b = QPushButton(text)
             b.clicked.connect(slot)
+            self.edit_buttons.append(b)
             bar.addWidget(b)
         self.layout_.addLayout(bar)
         self.table = Table(["Risk", "Organisation", "Type", "Frequency", "Loss per event", "Inherent",
@@ -266,6 +271,7 @@ class ControlsPage(Page):
         for text, slot in (("New control", self.add), ("Edit", self.edit), ("Delete", self.delete)):
             b = QPushButton(text)
             b.clicked.connect(slot)
+            self.edit_buttons.append(b)
             bar.addWidget(b)
         self.layout_.addLayout(bar)
         self.table = Table(["Control", "Organisation", "Type", "Implementation", "Effectiveness", "Latest test",
@@ -348,6 +354,7 @@ class AnalysisPage(Page):
         recalc.clicked.connect(lambda: self.run(use_cache=False))
         name = QPushButton("Name this run…")
         name.clicked.connect(self.name_run)
+        self.edit_buttons.append(name)
         for w in (QLabel("Scope"), self.unit, QLabel("Method"), self.engine, self.trials, run, recalc, name):
             bar.addWidget(w)
         bar.addStretch()
@@ -529,3 +536,21 @@ class AuditPage(Page):
             problems += [f"{e['entity_type']} {e['entity_id'][:8]}: {e['error']}" for e in result["data_errors"]]
             self.status.setText(f"<span style='color:#b91c1c'><b>{len(problems)} integrity problems</b></span>")
             QMessageBox.warning(self, "Audit log", "\n".join(problems[:30]))
+
+
+def _editor_only(method):
+    """Viewers can open pages but not change anything (double-clicks included)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not self.can_edit:
+            QMessageBox.information(self, "RiskMesh", "Your role is 'viewer': you can look, but not change data.")
+            return None
+        return method(self, *args, **kwargs)
+    return wrapper
+
+
+for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
+                     (RisksPage, ("add", "edit", "delete")), (ControlsPage, ("add", "edit", "delete")),
+                     (AnalysisPage, ("name_run",))):
+    for _name in _names:
+        setattr(_cls, _name, _editor_only(getattr(_cls, _name)))

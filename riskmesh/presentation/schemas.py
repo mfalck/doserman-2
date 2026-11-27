@@ -296,3 +296,42 @@ class SimulationRequest(_In):
 
 class RunLabel(_In):
     label: Optional[str] = Field(None, max_length=200)
+
+
+# -- Users and login --------------------------------------------------------------
+
+Role = Literal["viewer", "editor", "admin"]
+
+
+class LoginRequest(_In):
+    username: str
+    password: str
+
+
+class PasswordChange(_In):
+    current_password: str
+    new_password: str = Field(..., min_length=10)
+
+
+class PasswordSet(_In):
+    password: str = Field(..., min_length=10)
+
+
+class UserCreate(_In):
+    username: str
+    role: Role = "viewer"
+    password: str = Field(..., min_length=10)
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class UserUpdate(_In):
+    role: Optional[Role] = None
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class TokenCreate(_In):
+    name: str = Field(..., min_length=1, max_length=100)
+    days: Optional[int] = Field(None, ge=1, le=3650, description="None = does not expire")

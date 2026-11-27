@@ -10,3 +10,6 @@ riskmesh.db
 *.egg-info/
 build/
 dist/
+.env
+backups/
+config/

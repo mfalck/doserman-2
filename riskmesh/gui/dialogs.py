@@ -226,3 +226,40 @@ class ControlDialog(BaseDialog):
                 "control_type": self.kind.currentData(), "implementation_status": self.status.currentData(),
                 "effectiveness_rating": self.rating.value() or None, "owner_id": self.owner.currentData(),
                 "description": self.description.toPlainText().strip() or None, "risk_ids": risk_ids}
+
+
+class LoginDialog(QDialog):
+    """Local RiskMesh account. (Single sign-on is for the web app; ask an admin for a local account.)"""
+
+    def __init__(self, svc: RiskService, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.svc = svc
+        self.user = None
+        self.setWindowTitle("Sign in to RiskMesh")
+        self.setMinimumWidth(360)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.username = QLineEdit()
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.Password)
+        form.addRow("Username", self.username)
+        form.addRow("Password", self.password)
+        layout.addLayout(form)
+        self.message = QLabel("")
+        self.message.setStyleSheet("color: #b91c1c;")
+        layout.addWidget(self.message)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Sign in")
+        buttons.accepted.connect(self.try_login)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def try_login(self) -> None:
+        from ..domain.errors import AuthenticationError
+        try:
+            self.user = self.svc.authenticate(self.username.text().strip(), self.password.text())
+        except AuthenticationError as e:
+            self.message.setText(str(e))
+            self.password.clear()
+            return
+        self.accept()

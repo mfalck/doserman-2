@@ -12,6 +12,7 @@ The backend is chosen with RISKMESH_BACKEND or --backend (json, sql, neo4j).
 """
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ from typing import Any, Dict, List
 from ..bootstrap import make_service
 from ..config import FILE_NAME, load_settings, user_config_dir, write_template
 from ..domain import risk_model
-from ..domain.errors import DomainError, NotFoundError
+from ..domain.errors import DomainError, NotFoundError, ValidationError
 from ..services import RiskService
 from ..services.demo import seed_demo
 
@@ -75,6 +76,49 @@ def _resolve_run(svc: RiskService, ref: str) -> str:
     return ref
 
 
+def _ask_password() -> str:
+    first = getpass.getpass("Password (at least 10 characters): ")
+    if getpass.getpass("Repeat password: ") != first:
+        raise ValidationError("The passwords do not match.")
+    return first
+
+
+def _user_by_name(svc: RiskService, username: str):
+    found = [u for u in svc.list_users() if u.username == username]
+    if not found:
+        raise NotFoundError(f"No user '{username}'.")
+    return found[0]
+
+
+def _users(args, svc: RiskService) -> int:
+    cmd = args.users_command
+    if cmd == "list":
+        for u in svc.list_users():
+            print(f"{u.username:<24} {u.role:<7} {'active' if u.active else 'BLOCKED':<8} {u.auth_source:<6} "
+                  f"{u.display_name or ''}")
+    elif cmd in ("create-admin", "create"):
+        role = "admin" if cmd == "create-admin" else args.role
+        user = svc.create_user(args.username, role, _ask_password(), getattr(args, "name", None),
+                               getattr(args, "email", None))
+        print(f"Created {user.role} '{user.username}'.")
+    elif cmd == "password":
+        svc.set_password(_user_by_name(svc, args.username).id, _ask_password())
+        print("Password changed; existing logins of this user were ended.")
+    elif cmd == "role":
+        print(f"'{svc.update_user(_user_by_name(svc, args.username).id, role=args.role).username}' is now {args.role}.")
+    elif cmd in ("deactivate", "activate"):
+        svc.update_user(_user_by_name(svc, args.username).id, active=cmd == "activate")
+        print(f"'{args.username}' {'activated' if cmd == 'activate' else 'deactivated; its tokens were revoked'}.")
+    elif cmd == "token":
+        token, record = svc.issue_token(_user_by_name(svc, args.username).id, "api", args.name,
+                                        hours=args.days * 24 if args.days else None)
+        print(f"API token for {args.username} ('{record.name}'"
+              + (f", expires {record.expires_at[:10]}" if record.expires_at else ", does not expire") + "):")
+        print(token)
+        print("Store it now - it cannot be shown again. Send it as:  Authorization: Bearer <token>")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="riskmesh", description="RiskMesh - quantitative risk management")
     p.add_argument("--config", metavar="FILE", help="riskmesh.toml to use (default: see `riskmesh config path`)")
@@ -110,6 +154,12 @@ def build_parser() -> argparse.ArgumentParser:
     lb.add_argument("run")
     lb.add_argument("label")
 
+    bk = sub.add_parser("backup", help="complete backup incl. audit trail, runs and users (JSON)")
+    bk.add_argument("file")
+    rs = sub.add_parser("restore", help="restore a backup into empty storage and verify the audit chain")
+    rs.add_argument("file")
+    rs.add_argument("--force", action="store_true", help="delete existing data first")
+
     exp = sub.add_parser("export", help="export all data to a JSON file")
     exp.add_argument("file")
     imp = sub.add_parser("import", help="import a JSON export (replaces data)")
@@ -128,8 +178,31 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--host", help="default: [api] host")
     srv.add_argument("--port", type=int, help="default: [api] port")
     srv.add_argument("--reload", action="store_true")
+    srv.add_argument("--workers", type=int, default=1, help="worker processes (needs the SQL or Neo4j backend)")
 
     sub.add_parser("gui", help="start the desktop application")
+
+    usr = sub.add_parser("users", help="manage users who log in to the API / web app")
+    usr_sub = usr.add_subparsers(dest="users_command", required=True)
+    usr_sub.add_parser("list", help="list users")
+    ca = usr_sub.add_parser("create-admin", help="create an administrator (asks for the password)")
+    ca.add_argument("username")
+    cu = usr_sub.add_parser("create", help="create a user (asks for the password)")
+    cu.add_argument("username")
+    cu.add_argument("--role", choices=["viewer", "editor", "admin"], default="viewer")
+    cu.add_argument("--name", help="display name")
+    cu.add_argument("--email")
+    pw = usr_sub.add_parser("password", help="set a user's password (asks for it)")
+    pw.add_argument("username")
+    rl = usr_sub.add_parser("role", help="change a user's role")
+    rl.add_argument("username")
+    rl.add_argument("role", choices=["viewer", "editor", "admin"])
+    for name, text in (("deactivate", "block a user (keeps the history)"), ("activate", "unblock a user")):
+        usr_sub.add_parser(name, help=text).add_argument("username")
+    tk = usr_sub.add_parser("token", help="create an API token for scripts (shown once)")
+    tk.add_argument("username")
+    tk.add_argument("--name", default="script")
+    tk.add_argument("--days", type=int, help="expires after this many days (default: never)")
 
     cfg = sub.add_parser("config", help="create or show the configuration file")
     cfg_sub = cfg.add_subparsers(dest="config_command", required=True)
@@ -183,7 +256,11 @@ def main(argv=None) -> int:
         if settings.config_file:
             os.environ["RISKMESH_CONFIG"] = settings.config_file
         os.environ["RISKMESH_BACKEND"] = settings.backend
-        uvicorn.run("riskmesh.presentation.api:create_app", factory=True,
+        if args.workers > 1 and settings.backend in ("json", "memory"):
+            print("Error: several workers need the sql or neo4j backend (json/memory are one process).",
+                  file=sys.stderr)
+            return 1
+        uvicorn.run("riskmesh.presentation.api:create_app", factory=True, workers=args.workers,
                     host=args.host or settings.api_host, port=args.port or settings.api_port, reload=args.reload)
         return 0
 
@@ -246,12 +323,30 @@ def run(args, svc: RiskService) -> int:
             json.dump(svc.export_data(), f, indent=2)
         print(f"Exported to {args.file}")
 
+    elif args.command == "backup":
+        data = svc.backup_data()
+        with open(args.file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        print(f"Backup written to {args.file}: audit head #{data['audit_head_seq']} {data['audit_head_hash'][:16]}…, "
+              f"checksum {data['content_sha256'][:16]}…")
+
+    elif args.command == "restore":
+        with open(args.file, "r", encoding="utf-8") as f:
+            result = svc.restore_data(json.load(f), force=args.force)
+        print("Restored:", ", ".join(f"{v} {k}" for k, v in result["restored"].items() if v))
+        v = result["verification"]
+        print("Audit chain verified" if v["ok"] else f"VERIFICATION FAILED: {v['chain_errors'] + v['data_errors']}")
+        return 0 if v["ok"] else 2
+
     elif args.command == "import":
         with open(args.file, "rb") as f:
             raw = f.read()
         svc.source = f"import:{os.path.basename(args.file)}:sha256:{hashlib.sha256(raw).hexdigest()}"
         counts = svc.import_data(json.loads(raw.decode("utf-8")), replace=not args.merge)
         print("Imported:", ", ".join(f"{v} {k}" for k, v in counts.items()))
+
+    elif args.command == "users":
+        return _users(args, svc)
 
     elif args.command == "runs":
         if args.runs_command == "list":

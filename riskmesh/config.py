@@ -35,6 +35,7 @@ else:  # pragma: no cover
 FILE_NAME = "riskmesh.toml"
 BACKENDS = ("json", "sql", "neo4j", "memory")
 ENGINES = ("analytic", "monte_carlo")
+AUTH_MODES = ("none", "local", "oidc", "local+oidc")
 
 TEMPLATE = '''# RiskMesh configuration. Environment variables (RISKMESH_*) override these values.
 
@@ -68,6 +69,26 @@ currency = "DKK"
 
 [user]
 name = ""                           # name recorded in the audit log by the GUI/CLI (default: login name)
+
+[auth]
+# none       = no login (single user on your own machine; the API is open to anyone who can reach it)
+# local      = RiskMesh users with passwords (create the first admin: riskmesh users create-admin)
+# oidc       = single sign-on via Microsoft Entra ID or another OpenID Connect provider
+# local+oidc = both
+mode = "none"
+session_hours = 12
+
+[auth.oidc]
+issuer = ""                         # e.g. "https://login.microsoftonline.com/<tenant-id>/v2.0"
+client_id = ""
+client_secret_env = "RISKMESH_OIDC_CLIENT_SECRET"
+redirect_uri = "http://127.0.0.1:8000/api/auth/oidc/callback"   # must be registered at the provider
+frontend_url = "http://localhost:8080"                           # where users land after signing in
+scopes = ["openid", "profile", "email"]
+username_claim = "preferred_username"
+role_claim = "roles"                # Entra ID app roles; use "groups" for group ids
+role_map = { "RiskMesh.Admin" = "admin", "RiskMesh.Editor" = "editor", "RiskMesh.Viewer" = "viewer" }
+default_role = "viewer"             # role for users without a mapped claim; "" = refuse them
 '''
 
 
@@ -91,7 +112,27 @@ class Settings:
     impact_bands: Tuple[float, ...] = (50_000, 250_000, 1_000_000, 5_000_000)
     currency: str = "DKK"
     user_name: Optional[str] = None
+    auth_mode: str = "none"            # none | local | oidc | local+oidc
+    session_hours: float = 12
+    oidc_issuer: Optional[str] = None
+    oidc_client_id: Optional[str] = None
+    oidc_client_secret: Optional[str] = None
+    oidc_redirect_uri: str = "http://127.0.0.1:8000/api/auth/oidc/callback"
+    oidc_frontend_url: str = "http://localhost:8080"
+    oidc_scopes: Tuple[str, ...] = ("openid", "profile", "email")
+    oidc_username_claim: str = "preferred_username"
+    oidc_role_claim: str = "roles"
+    oidc_role_map: Dict[str, str] = field(default_factory=dict)
+    oidc_default_role: Optional[str] = "viewer"
     config_file: Optional[str] = None  # which file was loaded, if any
+
+    @property
+    def local_login(self) -> bool:
+        return self.auth_mode in ("local", "local+oidc")
+
+    @property
+    def oidc_login(self) -> bool:
+        return self.auth_mode in ("oidc", "local+oidc")
 
     def validate(self) -> "Settings":
         if self.backend not in BACKENDS:
@@ -104,12 +145,19 @@ class Settings:
                 raise ValueError(f"scoring.{name} must be 4 increasing numbers (got {bands})")
         if not 100 <= int(self.n_trials) <= 1_000_000:
             raise ValueError("analysis.n_trials must be between 100 and 1,000,000")
+        if self.auth_mode not in AUTH_MODES:
+            raise ValueError(f"auth.mode must be one of {', '.join(AUTH_MODES)} (got {self.auth_mode!r})")
+        if self.oidc_login and not (self.oidc_issuer and self.oidc_client_id):
+            raise ValueError("auth.oidc needs issuer and client_id when single sign-on is enabled")
+        for role in list(self.oidc_role_map.values()) + ([self.oidc_default_role] if self.oidc_default_role else []):
+            if role not in ("viewer", "editor", "admin"):
+                raise ValueError(f"auth.oidc: unknown role {role!r} (use viewer, editor or admin)")
         return self
 
     def public(self) -> Dict[str, Any]:
         """Settings for display, with secrets masked."""
         d = asdict(self)
-        for secret in ("neo4j_password", "api_key"):
+        for secret in ("neo4j_password", "api_key", "oidc_client_secret"):
             d[secret] = "***" if d[secret] else None
         return d
 
@@ -188,6 +236,21 @@ def load_settings(path: Optional[str] = None) -> Settings:
         s.impact_bands = tuple(scoring.get("impact_bands", s.impact_bands))
         s.currency = scoring.get("currency", s.currency)
         s.user_name = data.get("user", {}).get("name") or None
+        auth = data.get("auth", {})
+        oidc = auth.get("oidc", {})
+        s.auth_mode = auth.get("mode", s.auth_mode)
+        s.session_hours = float(auth.get("session_hours", s.session_hours))
+        s.oidc_issuer = oidc.get("issuer") or None
+        s.oidc_client_id = oidc.get("client_id") or None
+        s.oidc_client_secret = oidc.get("client_secret") or (
+            _env(oidc["client_secret_env"]) if oidc.get("client_secret_env") else None)
+        s.oidc_redirect_uri = oidc.get("redirect_uri", s.oidc_redirect_uri)
+        s.oidc_frontend_url = oidc.get("frontend_url", s.oidc_frontend_url)
+        s.oidc_scopes = tuple(oidc.get("scopes", s.oidc_scopes))
+        s.oidc_username_claim = oidc.get("username_claim", s.oidc_username_claim)
+        s.oidc_role_claim = oidc.get("role_claim", s.oidc_role_claim)
+        s.oidc_role_map = dict(oidc.get("role_map", {}))
+        s.oidc_default_role = oidc.get("default_role", s.oidc_default_role) or None
 
     # environment variables win
     s.backend = _env("RISKMESH_BACKEND") or s.backend
@@ -198,6 +261,8 @@ def load_settings(path: Optional[str] = None) -> Settings:
     s.neo4j_password = _env("RISKMESH_NEO4J_PASSWORD") or s.neo4j_password
     s.neo4j_database = _env("RISKMESH_NEO4J_DATABASE") or s.neo4j_database
     s.api_key = _env("RISKMESH_API_KEY") or s.api_key
+    s.auth_mode = _env("RISKMESH_AUTH_MODE") or s.auth_mode
+    s.oidc_client_secret = _env("RISKMESH_OIDC_CLIENT_SECRET") or s.oidc_client_secret
     if _env("RISKMESH_CORS_ORIGINS"):
         s.cors_origins = [o.strip() for o in _env("RISKMESH_CORS_ORIGINS").split(",") if o.strip()]
     return s.validate()
