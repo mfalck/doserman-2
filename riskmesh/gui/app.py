@@ -15,12 +15,12 @@ from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..services.demo import seed_demo
 from .dialogs import LoginDialog
-from .pages import AnalysisPage, AuditPage, ControlsPage, DashboardPage, OrganisationPage, RisksPage
+from .pages import AnalysisPage, AuditPage, ControlsPage, DashboardPage, OrganisationPage, ReportsPage, RisksPage
 from .widgets import guarded
 
 
 class MainWindow(QMainWindow):
-    PAGES = ["Overview", "Organisation", "Risks", "Controls", "Analysis", "Audit log"]
+    PAGES = ["Overview", "Organisation", "Risks", "Controls", "Analysis", "Reports", "Audit log"]
 
     def __init__(self, settings: Settings, svc=None, user=None):
         super().__init__()
@@ -48,7 +48,8 @@ class MainWindow(QMainWindow):
         defaults = {"engine": settings.engine, "n_trials": settings.n_trials, "seed": settings.seed}
         self.pages = [DashboardPage(self.svc, self.refresh_all), OrganisationPage(self.svc, self.refresh_all),
                       RisksPage(self.svc, self.refresh_all), ControlsPage(self.svc, self.refresh_all),
-                      AnalysisPage(self.svc, self.refresh_all, defaults), AuditPage(self.svc, self.refresh_all)]
+                      AnalysisPage(self.svc, self.refresh_all, defaults), ReportsPage(self.svc, self.refresh_all),
+                      AuditPage(self.svc, self.refresh_all)]
         for p in self.pages:
             self.stack.addWidget(p)
         layout.addWidget(self.nav)
@@ -161,6 +162,9 @@ class MainWindow(QMainWindow):
                 b.setEnabled(can_edit)
         for action in self.admin_actions:
             action.setEnabled(self.role == "admin")
+        for page in self.pages:
+            for b in getattr(page, "admin_buttons", []):
+                b.setEnabled(self.role == "admin")
 
     def open_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Open riskmesh.toml", "", "RiskMesh config (*.toml)")

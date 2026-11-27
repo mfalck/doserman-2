@@ -20,4 +20,8 @@ def make_service(settings: Settings, actor: Optional[str] = None, source: str = 
     repo = create_repository(settings)
     scoring = ScoringScale(likelihood_bands=tuple(settings.likelihood_bands),
                            impact_bands=tuple(settings.impact_bands))
-    return RiskService(repo, scoring=scoring, actor=actor or default_user(settings), source=source)
+    svc = RiskService(repo, scoring=scoring, actor=actor or default_user(settings), source=source)
+    svc.anchor_key_path = settings.audit_signing_key
+    svc.tsa_url = settings.audit_tsa_url
+    svc.anchor_on_period_close = settings.anchor_on_period_close
+    return svc

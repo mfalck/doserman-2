@@ -222,3 +222,10 @@ def test_single_sign_on_rejects_bad_tokens_and_unmapped_users(idp):
     r = c.get("/api/auth/oidc/callback?code=good-code&state=forged", follow_redirects=False)
     assert "#error=" in r.headers["location"]
     assert c.post("/api/auth/login", json={"username": "admin", "password": PW}).status_code == 404  # no passwords
+
+
+def test_closing_periods_needs_admin():
+    assert required_role("POST", "/api/periods/2026-Q4/close", {}) == "admin"
+    assert required_role("POST", "/api/periods/2026-Q4/reopen", {}) == "admin"
+    assert required_role("GET", "/api/reports/compare", {}) == "viewer"
+    assert required_role("POST", "/api/audit-log/anchor", {}) == "admin"

@@ -538,6 +538,124 @@ class AuditPage(Page):
             QMessageBox.warning(self, "Audit log", "\n".join(problems[:30]))
 
 
+
+# ---------------------------------------------------------------------------
+
+class ReportsPage(Page):
+    """Closed periods, development over time and the comparison of two periods."""
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.admin_buttons: list = []
+        self.layout_.addWidget(heading("Reports"))
+        self.layout_.addWidget(QLabel("Closing a period freezes its figures; reports always show what was reported. "
+                                      "Periods: 2026-11 (month), 2026-Q4 (quarter), 2026 (year)."))
+        bar = QHBoxLayout()
+        self.key = QLineEdit()
+        self.key.setPlaceholderText("2026-Q4")
+        self.key.setMaximumWidth(120)
+        self.note = QLineEdit()
+        self.note.setPlaceholderText("Note (optional)")
+        close = QPushButton("Close period")
+        close.clicked.connect(self.close_period)
+        reopen = QPushButton("Reopen selected")
+        reopen.clicked.connect(self.reopen_period)
+        self.admin_buttons += [close, reopen]
+        for w in (QLabel("Period"), self.key, self.note, close, reopen):
+            bar.addWidget(w)
+        bar.addStretch()
+        self.layout_.addLayout(bar)
+
+        split = QSplitter(Qt.Vertical)
+        top = QWidget()
+        top_l = QHBoxLayout(top)
+        self.periods = Table(["Period", "Status", "Closed", "By", "Expected loss", "Anchored", "Note"], numeric=[4])
+        top_l.addWidget(self.periods, 3)
+        self.trend = Table(["Period", "Expected loss", "P99", "Risks", "Actual losses"], numeric=[1, 2, 3, 4])
+        top_l.addWidget(self.trend, 2)
+        split.addWidget(top)
+
+        cmp_w = QWidget()
+        cmp_l = QVBoxLayout(cmp_w)
+        cmp_bar = QHBoxLayout()
+        self.a, self.b = QComboBox(), QComboBox()
+        go = QPushButton("Compare")
+        go.clicked.connect(self.compare)
+        for w in (QLabel("<b>Compare</b>"), self.a, QLabel("→"), self.b, go):
+            cmp_bar.addWidget(w)
+        cmp_bar.addStretch()
+        cmp_l.addLayout(cmp_bar)
+        row = QHBoxLayout()
+        self.bridge = Table(["Bridge (expected loss after controls)", "Amount"], numeric=[1])
+        self.changes = Table(["Risk", "Status", "Before", "After", "Change", "Heat map"], numeric=[2, 3, 4])
+        row.addWidget(self.bridge, 2)
+        row.addWidget(self.changes, 5)
+        cmp_l.addLayout(row)
+        split.addWidget(cmp_w)
+        self.layout_.addWidget(split, 1)
+
+    def refresh(self) -> None:
+        periods = self.svc.list_periods()
+        totals = {f.period_key: f for f in self.svc.period_facts(level="total")}
+        self.periods.fill([[p.key, p.status, (p.closed_at or "")[:10], p.closed_by or "",
+                            money(totals[p.key].eal_residual) if p.key in totals else "–",
+                            "yes" if p.anchor_id else "", p.note or ""] for p in periods],
+                          keys=[p.key for p in periods])
+        closed = sorted((p for p in periods if p.status == "closed"), key=lambda p: p.end)
+        self.trend.fill([[p.key, money(totals[p.key].eal_residual), money(totals[p.key].p99),
+                          totals[p.key].risk_count, money(totals[p.key].actual_loss)] for p in closed])
+        for combo, default in ((self.a, -2), (self.b, -1)):
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems([p.key for p in closed])
+            if current and combo.findText(current) >= 0:
+                combo.setCurrentText(current)
+            elif len(closed) >= 2:
+                combo.setCurrentIndex(len(closed) + default)
+            combo.blockSignals(False)
+
+    def compare(self) -> None:
+        if not self.a.currentText() or not self.b.currentText():
+            return
+        c = guarded(self, lambda: self.svc.compare_periods(self.a.currentText(), self.b.currentText()))
+        if not c:
+            return
+        b = c["bridge"]
+        self.bridge.fill([[f"Expected loss {c['a']}", money(b["start"])], ["+ new risks", money(b["new_risks"])],
+                          ["− removed risks", money(b["removed_risks"])],
+                          ["± changed estimates", money(b["changed_estimates"])],
+                          ["± controls", money(b["controls"])], [f"Expected loss {c['b']}", money(b["end"])]])
+
+        def hm(v):
+            return f"{v[0]}×{v[1]}" if v else "–"
+        rows = [[r["name"], r["status"], money(r["eal_residual"]["a"]), money(r["eal_residual"]["b"]),
+                 money(r["eal_residual"]["change"]), f"{hm(r['heatmap']['a'])} → {hm(r['heatmap']['b'])}"]
+                for r in c["risks"]]
+        colors = {(i, 1): {"new": "#fed7aa", "removed": "#bbf7d0", "changed": "#fef08a"}.get(r["status"], "")
+                  for i, r in enumerate(c["risks"])}
+        self.changes.fill(rows, colors={k: v for k, v in colors.items() if v})
+
+    def close_period(self) -> None:
+        key = self.key.text().strip()
+        if not key:
+            return
+        period = guarded(self, lambda: self.svc.close_period(key, self.note.text().strip() or None))
+        if period:
+            QMessageBox.information(self, "Period closed", f"{period.key} closed; figures frozen"
+                                    + (" and audit chain anchored." if period.anchor_id else "."))
+            self.key.clear()
+            self.note.clear()
+            self.changed()
+
+    def reopen_period(self) -> None:
+        key = self.periods.selected_key()
+        if key and QMessageBox.question(self, "Reopen", f"Reopen {key}? Its frozen figures are removed "
+                                        "(recorded in the audit log).") == QMessageBox.Yes:
+            if guarded(self, lambda: self.svc.reopen_period(key)):
+                self.changed()
+
+
 def _editor_only(method):
     """Viewers can open pages but not change anything (double-clicks included)."""
     @functools.wraps(method)

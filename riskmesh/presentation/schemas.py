@@ -332,6 +332,14 @@ class UserUpdate(_In):
     active: Optional[bool] = None
 
 
+class PeriodClose(_In):
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+class AnchorCreate(_In):
+    reason: Optional[str] = Field(None, max_length=500)
+
+
 class TokenCreate(_In):
     name: str = Field(..., min_length=1, max_length=100)
     days: Optional[int] = Field(None, ge=1, le=3650, description="None = does not expire")

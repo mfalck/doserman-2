@@ -97,6 +97,24 @@ _PROTECT = {
 }
 
 
+# Reporting views for Power BI, Excel etc. (read-only; columns are stable)
+_FIGURES = ("risk_count, high_risk_count, eal_inherent, eal_residual, p50, p90, p99, tvar99, p99_inherent, "
+            "score_inherent, score_residual, controls, events, actual_loss")
+VIEWS = {
+    "v_periods": "SELECT key AS period, period_type, start AS period_start, \"end\" AS period_end, status, "
+                 "closed_at, closed_by, note, run_id, anchor_id FROM reporting_periods",
+    "v_period_total": f"SELECT period_key AS period, period_end, {_FIGURES}, control_effectiveness "
+                      "FROM period_facts WHERE level = 'total'",
+    "v_period_unit": f"SELECT period_key AS period, period_end, entity_id AS unit_id, name AS unit, "
+                     f"business_unit_id AS parent_unit_id, {_FIGURES} FROM period_facts WHERE level = 'unit'",
+    "v_period_category": f"SELECT period_key AS period, period_end, entity_id AS category, {_FIGURES} "
+                         "FROM period_facts WHERE level = 'category'",
+    "v_period_risk": f"SELECT period_key AS period, period_end, entity_id AS risk_id, name AS risk, "
+                     f"business_unit_id AS unit_id, category, likelihood_inherent, impact_inherent, "
+                     f"likelihood_residual, impact_residual, {_FIGURES} FROM period_facts WHERE level = 'risk'",
+}
+
+
 class SqlRepository(Repository):
 
     def __init__(self, url: str = "sqlite:///riskmesh.db", echo: bool = False):
@@ -131,6 +149,9 @@ class SqlRepository(Repository):
             if conn.execute(select(LOCK.c.id)).first() is None:
                 conn.execute(insert(LOCK).values(id=1, n=0))
             self._protect_audit(conn)
+            for name, sql in VIEWS.items():  # recreated on every start, so they follow the schema
+                conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+                conn.execute(text(f"CREATE VIEW {name} AS {sql}"))
 
     def _add_missing_columns(self, conn: Connection) -> None:
         inspector = inspect(conn)

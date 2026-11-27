@@ -90,6 +90,42 @@ def _user_by_name(svc: RiskService, username: str):
     return found[0]
 
 
+def _period(args, svc: RiskService) -> int:
+    cmd = args.period_command
+    if cmd == "close":
+        p = svc.close_period(args.key, args.note)
+        print(f"Closed {p.key} ({p.start} – {p.end}); figures frozen" + (", audit chain anchored" if p.anchor_id else ""))
+    elif cmd == "reopen":
+        print(f"Reopened {svc.reopen_period(args.key).key}")
+    elif cmd == "list":
+        for p in svc.list_periods():
+            total = svc.period_facts(p.key, "total")
+            eal = money(total[0].eal_residual).strip() if total else "–"
+            print(f"{p.key:<9} {p.status:<7} {(p.closed_at or '')[:10]}  {p.closed_by or '':<12} expected loss {eal}"
+                  + (f"  ({p.note})" if p.note else ""))
+    elif cmd == "compare":
+        c = svc.compare_periods(args.a, args.b)
+        b = c["bridge"]
+        print(f"Expected annual loss (after controls) {c['a']} -> {c['b']}")
+        for label, key in (("Start", "start"), ("+ new risks", "new_risks"), ("- removed risks", "removed_risks"),
+                           ("+/- changed estimates", "changed_estimates"), ("+/- controls", "controls"),
+                           ("End", "end")):
+            print(f"  {label:<24}{money(b[key])}")
+        print(f"\n{'Risk':<30}{'Status':<10}{c['a']:>14}{c['b']:>14}{'Change':>14}")
+        for r in c["risks"]:
+            e = r["eal_residual"]
+            print(f"{r['name'][:29]:<30}{r['status']:<10}{money(e['a'] or 0)}{money(e['b'] or 0)}{money(e['change'])}")
+    elif cmd == "trend":
+        for row in svc.trend(args.metric, args.level, args.entity):
+            print(f"{row['period']:<9} {money(row['value']) if row['value'] is not None else '–'}")
+    elif cmd == "export":
+        from ..services.reporting import facts_to_csv
+        with open(args.file, "w", encoding="utf-8", newline="") as f:
+            f.write(facts_to_csv(svc.period_facts()))
+        print(f"Period facts written to {args.file}")
+    return 0
+
+
 def _users(args, svc: RiskService) -> int:
     cmd = args.users_command
     if cmd == "list":
@@ -170,6 +206,12 @@ def build_parser() -> argparse.ArgumentParser:
     aud_sub = aud.add_subparsers(dest="audit_command", required=True)
     ver = aud_sub.add_parser("verify", help="check the hash chain and the data against it")
     ver.add_argument("--chain-only", action="store_true", help="do not compare the stored data")
+    kg = aud_sub.add_parser("keygen", help="create an Ed25519 key for signing anchors")
+    kg.add_argument("path", nargs="?", default="riskmesh-audit-key.pem")
+    kg.add_argument("--force", action="store_true")
+    an = aud_sub.add_parser("anchor", help="sign and/or time-stamp the current chain head")
+    an.add_argument("--reason")
+    aud_sub.add_parser("anchors", help="list anchors")
     log_ = aud_sub.add_parser("log", help="show the newest audit entries")
     log_.add_argument("--limit", type=int, default=20)
     log_.add_argument("--entity", help="history of one entity id")
@@ -181,6 +223,22 @@ def build_parser() -> argparse.ArgumentParser:
     srv.add_argument("--workers", type=int, default=1, help="worker processes (needs the SQL or Neo4j backend)")
 
     sub.add_parser("gui", help="start the desktop application")
+
+    per = sub.add_parser("period", help="close reporting periods and compare them")
+    per_sub = per.add_subparsers(dest="period_command", required=True)
+    pc = per_sub.add_parser("close", help="freeze the figures of a period: 2026, 2026-Q4 or 2026-11")
+    pc.add_argument("key")
+    pc.add_argument("--note")
+    per_sub.add_parser("reopen", help="unfreeze a closed period").add_argument("key")
+    per_sub.add_parser("list", help="closed periods")
+    pcmp = per_sub.add_parser("compare", help="compare two closed periods")
+    pcmp.add_argument("a")
+    pcmp.add_argument("b")
+    ptr = per_sub.add_parser("trend", help="a figure over all closed periods")
+    ptr.add_argument("--metric", default="eal_residual")
+    ptr.add_argument("--level", default="total", choices=["total", "unit", "category", "risk"])
+    ptr.add_argument("--entity", help="unit id, category or risk id")
+    per_sub.add_parser("export", help="all period facts as CSV").add_argument("file")
 
     usr = sub.add_parser("users", help="manage users who log in to the API / web app")
     usr_sub = usr.add_subparsers(dest="users_command", required=True)
@@ -348,6 +406,9 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "users":
         return _users(args, svc)
 
+    elif args.command == "period":
+        return _period(args, svc)
+
     elif args.command == "runs":
         if args.runs_command == "list":
             for r in svc.list_runs():
@@ -369,6 +430,26 @@ def run(args, svc: RiskService) -> int:
                 run = svc.label_run(run_id, args.label)
                 print(f"Run #{run.number} labelled '{run.label}'")
 
+    elif args.command == "audit" and args.audit_command == "keygen":
+        from ..domain import anchoring
+        try:
+            path, kid = anchoring.generate_key(Path(args.path), overwrite=args.force)
+        except FileExistsError as e:
+            print(f"Error: {e} (use --force to replace it)", file=sys.stderr)
+            return 1
+        print(f"Created {path} (key id {kid}). Set [audit] signing_key in riskmesh.toml to use it.")
+        print("Keep this file away from the database and note the key id somewhere else.")
+
+    elif args.command == "audit" and args.audit_command == "anchor":
+        from ..domain import anchoring
+        a = svc.create_anchor(args.reason)
+        print("Anchored", anchoring.describe(a.to_dict()))
+
+    elif args.command == "audit" and args.audit_command == "anchors":
+        from ..domain import anchoring
+        for a in svc.list_anchors():
+            print(f"{(a.created_at or '')[:19]}  {anchoring.describe(a.to_dict())}  {a.reason or ''}")
+
     elif args.command == "audit" and args.audit_command == "verify":
         result = svc.verify_audit(check_data=not args.chain_only)
         print(f"Entries: {result['entries']}   head: #{result['head_seq']} {result['head_hash']}")
@@ -376,6 +457,10 @@ def run(args, svc: RiskService) -> int:
             print(f"  CHAIN  #{err['seq']}: {err['error']}")
         for err in result["data_errors"]:
             print(f"  DATA   {err['entity_type']} {err['entity_id']}: {err['error']}")
+        for err in result["anchor_errors"]:
+            print(f"  ANCHOR #{err['seq']}: {err['error']}")
+        if result["anchors"]:
+            print(f"Anchors: {len(result['anchors'])}, newest covers #{max(a['seq'] for a in result['anchors'])}")
         print("OK - audit log intact" if result["ok"] else "FAILED - see errors above")
         return 0 if result["ok"] else 2
 
