@@ -51,8 +51,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev,postgres]"
-      - run: python -m pytest -q -k "postgres or neo4j"
+      - run: pip install -e ".[dev,postgres]" pytest-github-actions-annotate-failures
+      - run: python -m pytest -q -rf -k "postgres or neo4j"
 
   # The container image builds, starts with PostgreSQL, and a login works.
   docker:

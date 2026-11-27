@@ -30,6 +30,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 
 from ..domain.models import ENTITY_TYPES, ApiToken, AuditEntry, Entity, User
+from ..domain.audit import sha256 as audit_sha
 from .base import E, Repository, StorageError
 
 log = logging.getLogger(__name__)
@@ -133,6 +134,9 @@ class SqlRepository(Repository):
 
     def _migrate(self) -> None:
         with self.engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                # several processes may start at once: migrate one at a time
+                conn.execute(text("SELECT pg_advisory_xact_lock(727274)"))
             metadata.create_all(conn)
             row = conn.execute(select(META.c.value).where(META.c.key == "schema_version")).first()
             current = int(row[0]) if row else SCHEMA_VERSION
@@ -149,9 +153,20 @@ class SqlRepository(Repository):
             if conn.execute(select(LOCK.c.id)).first() is None:
                 conn.execute(insert(LOCK).values(id=1, n=0))
             self._protect_audit(conn)
-            for name, sql in VIEWS.items():  # recreated on every start, so they follow the schema
-                conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
-                conn.execute(text(f"CREATE VIEW {name} AS {sql}"))
+            self._ensure_views(conn)
+
+    def _ensure_views(self, conn: Connection) -> None:
+        """(Re)creates the reporting views only when their definition changed."""
+        version = audit_sha(VIEWS)
+        row = conn.execute(select(META.c.value).where(META.c.key == "views_version")).first()
+        existing = set(inspect(conn).get_view_names())
+        if row and row[0] == version and existing >= set(VIEWS):
+            return
+        for name, sql in VIEWS.items():
+            conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+            conn.execute(text(f"CREATE VIEW {name} AS {sql}"))
+        conn.execute(delete(META).where(META.c.key == "views_version"))
+        conn.execute(insert(META).values(key="views_version", value=version))
 
     def _add_missing_columns(self, conn: Connection) -> None:
         inspector = inspect(conn)
