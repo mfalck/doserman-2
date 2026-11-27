@@ -90,6 +90,70 @@ def _user_by_name(svc: RiskService, username: str):
     return found[0]
 
 
+def _find(items, name: str):
+    hits = [x for x in items if x.id == name or x.name.lower() == name.lower()]
+    return hits[0] if hits else None
+
+
+def _third_party(args, svc: RiskService) -> int:
+    cmd = args.tp_command
+    if cmd == "overview":
+        o = svc.third_party_overview()
+        t = o["totals"]
+        print(f"{t['suppliers']} suppliers, {t['services']} services, {t['customers']} customers "
+              f"({t['regulated_customers']} regulated, {t['critical_function_customers']} with a critical function)")
+        print(f"\n{'Supplier':<28}{'Tier':<11}{'Services':>9}{'Customers':>10}{'Contract value':>16}  Regulations")
+        for x in o["suppliers"]:
+            regs = ", ".join(f"{k} {v}" for k, v in x["by_regulation"].items())
+            print(f"{x['name'][:27]:<28}{x['tier']:<11}{x['service_count']:>9}{x['customer_count']:>10}"
+                  f"{money(x['contract_value'])}  {regs}")
+        print(f"\n{'Service':<28}{'Criticality':<12}{'Suppliers':>10}{'Customers':>10}{'Contract value':>16}  Notify within")
+        for x in o["services"]:
+            h = x["shortest_notification_hours"]
+            print(f"{x['name'][:27]:<28}{x['criticality']:<12}{x['supplier_count']:>10}{x['customer_count']:>10}"
+                  f"{money(x['contract_value'])}  {'' if h is None else f'{h:g} h'}")
+    elif cmd == "findings":
+        for f in svc.third_party_findings():
+            print(f"{f['severity'].upper():<7}{f['entity_type']:<10}{f['name'][:30]:<31}{f['finding']}")
+    elif cmd == "exposure":
+        sup, ser = _find(svc.list_suppliers(), args.name), _find(svc.list_services(), args.name)
+        if not sup and not ser:
+            print(f"Error: no supplier or service called {args.name!r}", file=sys.stderr)
+            return 1
+        e = svc.supplier_exposure(sup.id) if sup else svc.service_exposure(ser.id)
+        print(f"If {(sup or ser).name} fails: {e['customer_count']} customers, contract value"
+              f"{money(e['contract_value'])}, {e['critical_function_customers']} with a critical function")
+        if e["shortest_notification_hours"] is not None:
+            print(f"Shortest notification deadline: {e['shortest_notification_hours']:g} hours")
+        for x in e.get("via_suppliers", []):
+            print(f"  via supplier   {x['name']} ({'subcontractor' if x['distance'] == 1 else 'further up the chain'})")
+        for x in e.get("services", []):
+            print(f"  service        {x['name']} ({x['criticality']})")
+        for x in e.get("suppliers", []):
+            level = "direct" if x["depth"] == 1 else f"level {x['depth']}"
+            print(f"  depends on     {x['name']} ({x['tier']}, {level})")
+        for c in e["customers"]:
+            print(f"  customer       {c['name']} {', '.join(c['regulations'])}")
+    elif cmd == "customer":
+        c = _find(svc.list_customers(), args.name)
+        if not c:
+            print(f"Error: no customer called {args.name!r}", file=sys.stderr)
+            return 1
+        p = svc.customer_profile(c.id)
+        print(f"{c.name}  {c.sector or ''}  {', '.join(c.regulations)}"
+              + ("  (critical function)" if c.critical_function else ""))
+        for x in p["services"]:
+            print(f"  service        {x['name']} ({x['criticality']}, RTO {x['rto_hours'] if x['rto_hours'] is not None else '?'} h)")
+        for x in p["suppliers"]:
+            print(f"  supplier       {x['name']} ({x['tier']}, {'direct' if x['depth'] == 1 else 'fourth party'}, "
+                  f"{x['country'] or '?'})")
+        for r in p["risks"]:
+            print(f"  risk           {r['name']} ({r['level']}, expected loss{money(r['expected_annual_loss'])})")
+        for f in p["findings"]:
+            print(f"  {f['severity'].upper():<7}        {f['name']}: {f['finding']}")
+    return 0
+
+
 def _period(args, svc: RiskService) -> int:
     cmd = args.period_command
     if cmd == "close":
@@ -166,6 +230,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("demo", help="replace all data with the example organisation")
+
+    tp = sub.add_parser("third-party", help="suppliers, services and customers: concentration and findings")
+    tp_sub = tp.add_subparsers(dest="tp_command", required=True)
+    tp_sub.add_parser("overview", help="what depends on which supplier and service")
+    tp_sub.add_parser("findings", help="what a NIS2/DORA review would ask about")
+    tpe = tp_sub.add_parser("exposure", help="who is hit if a supplier or service fails")
+    tpe.add_argument("name", help="supplier or service name (or id)")
+    tpc = tp_sub.add_parser("customer", help="what a customer depends on")
+    tpc.add_argument("name", help="customer name (or id)")
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
@@ -408,6 +481,9 @@ def run(args, svc: RiskService) -> int:
 
     elif args.command == "period":
         return _period(args, svc)
+
+    elif args.command == "third-party":
+        return _third_party(args, svc)
 
     elif args.command == "runs":
         if args.runs_command == "list":

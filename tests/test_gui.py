@@ -108,3 +108,26 @@ def test_reports_page_closes_and_compares(window):
     assert page.periods.rowCount() == 2 and page.trend.rowCount() == 2
     page.compare()
     assert page.bridge.rowCount() == 6 and page.changes.rowCount() == 7
+
+
+def test_third_party_page_shows_concentration(window):
+    page = window.pages[window.PAGES.index("Third parties")]
+    page.refresh()
+    assert page.table.rowCount() == 3 and page.findings.rowCount() > 0
+    page.table.selectRow(0)
+    page.show_exposure()
+    assert "If " in page.exposure.toPlainText()
+    for tab in ("Services", "Customers"):
+        page.kind.setCurrentText(tab)
+        assert page.table.rowCount() == 3
+        page.table.selectRow(0)
+        page.show_exposure()
+        assert page.exposure.toPlainText()
+    from riskmesh.gui.dialogs import CustomerDialog, ServiceDialog, SupplierDialog
+    c = window.svc.list_customers()[0]
+    values = CustomerDialog(window.svc, c).values()
+    assert values["service_ids"] == c.service_ids and values["regulations"] == c.regulations
+    s = window.svc.list_services()[0]
+    assert ServiceDialog(window.svc, s).values()["supplier_ids"] == s.supplier_ids
+    sup = window.svc.list_suppliers()[0]
+    assert SupplierDialog(window.svc, sup).values()["subcontractor_ids"] == sup.subcontractor_ids

@@ -188,6 +188,56 @@ Deleting keeps the data consistent: deleting a unit removes its assets, risks,
 controls and events; deleting a risk removes its events and unlinks it from
 controls; deleting a person clears the roles they held.
 
+## Third parties: suppliers, services and customers
+
+For organisations that are a supplier themselves (for example to customers
+under NIS2 or DORA) and depend on suppliers in turn:
+
+```
+supplier ─┬─ its subcontractors (our fourth parties)
+          └─> service we deliver ──> customers (regulation, contract terms)
+```
+
+* **Suppliers** (`/api/suppliers`): tier (critical / important / standard),
+  country, data locations, certifications or assurance reports, contract and
+  review dates, exit plan, and their own subcontractors.
+* **Services** (`/api/services`): what we deliver, who delivers it, criticality,
+  RTO/RPO, the suppliers and assets it needs.
+* **Customers** (`/api/customers`): sector, regulation (NIS2 essential/important,
+  DORA, CER, GDPR), the services they use, whether we support a critical or
+  important function for them (DORA), contract value, contractual incident
+  notification deadline, audit rights and exit support.
+* Risks can be linked to the services they can disrupt and the suppliers they
+  come from (`service_ids`, `supplier_ids`).
+
+What it answers:
+
+* `/api/suppliers/{id}/exposure`: if this supplier fails, which services and
+  customers are hit, including when it is only a subcontractor of one of our
+  suppliers; the contract value at stake, regulated customers and the shortest
+  notification deadline.
+* `/api/services/{id}/exposure`: the customers of a service and its whole
+  supplier chain.
+* `/api/customers/{id}/profile`: what a customer depends on (services,
+  suppliers incl. fourth parties, risks, controls), the basis of the
+  information DORA customers ask for.
+* `/api/third-parties/overview`: concentration (suppliers and services ranked by
+  what depends on them) and **findings** a NIS2/DORA review would ask about:
+  overdue reviews, contracts ending, critical suppliers without an exit plan,
+  personal data in unknown locations, DORA contracts missing audit rights, exit
+  support or a notification deadline, critical services without an RTO.
+
+```bash
+riskmesh third-party overview
+riskmesh third-party findings
+riskmesh third-party exposure "Nordic Cloud A/S"
+riskmesh third-party customer "East Savings Bank"
+```
+
+The desktop application and the web app have a *Third parties* page with the
+same views. The regulatory findings are a checklist, not legal advice: confirm
+the scope of NIS2 and DORA for your customers with your compliance function.
+
 ## Audit trail (tamper-evident)
 
 Every change made through RiskMesh appends one entry per affected entity:

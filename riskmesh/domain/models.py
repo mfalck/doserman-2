@@ -16,6 +16,10 @@ RISK_EVENT_TYPES = ("INCIDENT", "NEAR_MISS", "AUDIT_FINDING")
 RISK_EVENT_STATUSES = ("OPEN", "INVESTIGATING", "CLOSED")
 CONTROL_EVENT_TYPES = ("TEST", "REVIEW", "AUDIT")
 CONTROL_EVENT_STATUSES = ("PASSED", "FAILED", "PARTIAL", "IN_PROGRESS")
+SERVICE_CRITICALITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+SUPPLIER_TIERS = ("CRITICAL", "IMPORTANT", "STANDARD")
+# regimes a customer is subject to; they decide what the customer will ask of us
+REGULATIONS = ("NIS2_ESSENTIAL", "NIS2_IMPORTANT", "DORA", "CER", "GDPR", "OTHER")
 
 
 def new_id() -> str:
@@ -103,6 +107,67 @@ class Risk(Entity):
     owner_id: Optional[str] = None
     residual_frequency: Optional[Dict[str, Any]] = None
     residual_impact: Optional[Dict[str, Any]] = None
+    service_ids: List[str] = field(default_factory=list)    # services the risk can disrupt
+    supplier_ids: List[str] = field(default_factory=list)   # suppliers the risk comes from
+
+
+@dataclass
+class Supplier(Entity):
+    """
+    A third party we depend on. `subcontractor_ids` are its own suppliers
+    (our fourth parties), so a failure can be traced down the chain.
+    """
+    kind: ClassVar[str] = "supplier"
+    name: str
+    tier: str = "STANDARD"                       # CRITICAL | IMPORTANT | STANDARD
+    description: Optional[str] = None
+    country: Optional[str] = None
+    owner_id: Optional[str] = None               # who manages the relationship
+    contract_start: Optional[str] = None         # ISO dates
+    contract_end: Optional[str] = None
+    next_review: Optional[str] = None
+    processes_personal_data: bool = False
+    data_locations: List[str] = field(default_factory=list)   # e.g. ["DK", "EU"]
+    certifications: List[str] = field(default_factory=list)   # e.g. ["ISO 27001", "ISAE 3402"]
+    exit_plan: bool = False
+    subcontractor_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class Service(Entity):
+    """Something we deliver to customers, the systems it runs on and the suppliers it needs."""
+    kind: ClassVar[str] = "service"
+    name: str
+    business_unit_id: str                        # who delivers it
+    description: Optional[str] = None
+    criticality: str = "MEDIUM"                  # CRITICAL | HIGH | MEDIUM | LOW
+    owner_id: Optional[str] = None
+    asset_ids: List[str] = field(default_factory=list)
+    supplier_ids: List[str] = field(default_factory=list)
+    rto_hours: Optional[float] = None            # recovery time objective
+    rpo_hours: Optional[float] = None            # recovery point objective
+
+
+@dataclass
+class Customer(Entity):
+    """
+    A customer, the services it uses and what its regulation and contract
+    demand of us (DORA: whether we support a critical or important function).
+    """
+    kind: ClassVar[str] = "customer"
+    name: str
+    sector: Optional[str] = None                 # e.g. "municipal", "energy", "finance"
+    regulations: List[str] = field(default_factory=list)
+    service_ids: List[str] = field(default_factory=list)
+    critical_function: bool = False
+    account_owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    contract_value: Optional[float] = None       # per year
+    notification_hours: Optional[float] = None   # contractual deadline for telling them about an incident
+    audit_rights: bool = False
+    exit_support: bool = False
+    notes: Optional[str] = None
 
 
 @dataclass
@@ -306,7 +371,7 @@ class PeriodFact(Entity):
 
 
 # Data entities in dependency order (referenced types first)
-DATA_TYPES = (Person, BusinessUnit, Asset, Risk, Control, RiskEvent, ControlEvent)
+DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Control, RiskEvent, ControlEvent)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
 VERIFIED_TYPES = DATA_TYPES + (User, ReportingPeriod)
@@ -325,4 +390,14 @@ REFERENCES = [
     (Control, "risk_ids", Risk, True, "MITIGATES"),
     (RiskEvent, "risk_id", Risk, False, "RELATED_TO"),
     (ControlEvent, "control_id", Control, False, "TESTS"),
+    (Risk, "service_ids", Service, True, "DISRUPTS"),
+    (Risk, "supplier_ids", Supplier, True, "ORIGINATES_AT"),
+    (Supplier, "owner_id", Person, False, "OWNED_BY"),
+    (Supplier, "subcontractor_ids", Supplier, True, "SUBCONTRACTS_TO"),
+    (Service, "business_unit_id", BusinessUnit, False, "DELIVERED_BY"),
+    (Service, "owner_id", Person, False, "OWNED_BY"),
+    (Service, "asset_ids", Asset, True, "RUNS_ON"),
+    (Service, "supplier_ids", Supplier, True, "DEPENDS_ON"),
+    (Customer, "service_ids", Service, True, "USES"),
+    (Customer, "account_owner_id", Person, False, "ACCOUNT_OWNER"),
 ]
