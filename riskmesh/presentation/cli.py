@@ -64,6 +64,20 @@ def print_report(report: Dict[str, Any], title: str) -> None:
             for c in cons[kind]:
                 print(f"{(label + ' ' + c['name'])[:31]:<32}{money(c['mean'])}{money(c['p90'])}{money(c['p99'])}")
 
+    corr = report.get("correlation")
+    if corr and not corr["applied"]:
+        print(f"\nNote: {corr['pair_count']} correlations are not applied. {corr['note']}")
+    elif corr:
+        print(f"\n{len(corr['pairs'])} correlations applied" +
+              (" (the pairs did not fit together and were adjusted to the nearest valid set)" if corr["adjusted"] else ""))
+
+    for a in report.get("appetite", []):
+        print(f"\nAppetite: {a['name']} - {'OUTSIDE' if a['breached'] else 'within'}")
+        print(f"  {'Loss above':>16}{'Accepted':>10}{'Actual':>10}")
+        for pt in a["points"]:
+            print(f"  {money(pt['loss']):>16}{pt['tolerance']:>10.2%}{pt['actual']:>10.2%}"
+                  f"{'  exceeded' if pt['breached'] else ''}")
+
 
 def print_tree(nodes: List[Dict[str, Any]], indent: int = 0) -> None:
     for n in nodes:
@@ -298,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     tps.add_argument("name", help="supplier or service name (or id)")
     tps.add_argument("hours", type=float)
     sub.add_parser("tree", help="show the organisation hierarchy")
+    sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
     sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
@@ -539,6 +554,18 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "portfolio":
+        names = {r.id: r.name for r in svc.list_risks()}
+        units = {u.id: u.name for u in svc.list_business_units()}
+        print(f"{'Correlation':<58}{'Coefficient':>12}")
+        for c in svc.list_correlations():
+            pair = f"{names.get(c.risk_a_id, c.risk_a_id)} ~ {names.get(c.risk_b_id, c.risk_b_id)}"
+            print(f"{pair[:57]:<58}{c.coefficient:>12.2f}")
+        for a in svc.list_appetites():
+            print(f"\nAppetite: {a.name} ({units.get(a.business_unit_id, 'whole organisation')})")
+            for pt in a.points:
+                print(f"  at most {pt['probability']:.2%} chance per year of losing more than {money(pt['loss']).strip()}")
+        print("\nSee 'riskmesh simulate' for whether the appetite is kept.")
     elif args.command == "third-party":
         return _third_party(args, svc)
 

@@ -26,8 +26,8 @@ from ..domain import audit
 from ..domain.errors import ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
-                             RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Asset, BusinessUnit, Control,
-                             ControlEvent, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
+                             ControlEvent, Correlation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -126,6 +126,17 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Services", "service_ids", "refs", ref=Service, width=26),
         Col("Suppliers", "supplier_ids", "refs", ref=Supplier, width=22),
         Col("Description", "description", width=40)]),
+    ("Correlations", Correlation, [
+        Col("Risk A", "risk_a_id", "ref", required=True, ref=Risk, width=28),
+        Col("Risk B", "risk_b_id", "ref", required=True, ref=Risk, width=28),
+        Col("Coefficient -1 to 1", "coefficient", "number", required=True, width=12),
+        Col("Rationale", "rationale", width=50)]),
+    ("Appetite", Appetite, [
+        Col("Name", "name", required=True, width=28),
+        Col("Organisation", "business_unit_id", "ref", ref=BusinessUnit, width=22),
+        Col("Tolerance (loss @ max chance per year)", "points", "points", required=True, width=40),
+        Col("Owner", "owner_id", "ref", ref=Person, width=20),
+        Col("Statement", "statement", width=50)]),
     ("Controls", Control, [
         Col("Name", "name", required=True, width=28),
         Col("Organisation", "business_unit_id", "ref", required=True, ref=BusinessUnit, width=22),
@@ -167,6 +178,9 @@ README = [
     "    lognormal: low P10 and high P90 (80% of events between them); pert/triangular: min, most likely, max;",
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
+    "- Correlations: how strongly two risks tend to have bad years together, -1 to 1 (0.3 weak, 0.6 strong).",
+    "- Appetite tolerance: points 'loss @ chance', e.g. '1000000 @ 10%; 10000000 @ 1%' = at most 10% chance",
+    "    per year of losing more than 1,000,000 and at most 1% of more than 10,000,000. No organisation = all.",
     "",
     "Upload shows a preview first. Sheets you remove from the workbook are left untouched.",
     "Merge (default) keeps stored rows that are not in a sheet; replace deletes them (administrators only).",
@@ -227,6 +241,22 @@ def _date(v: Any) -> Optional[str]:
     except ValueError:
         raise ValueError(f"'{v}' is not a date (YYYY-MM-DD)") from None
     return s
+
+
+def _points(v: Any) -> List[Dict[str, float]]:
+    """'1000000 @ 10%; 10000000 @ 1%' -> [{"loss": 1e6, "probability": 0.1}, ...]."""
+    out = []
+    for part in _split(v):
+        if "@" not in part:
+            raise ValueError(f"'{part}' should be 'loss @ chance', e.g. '1000000 @ 10%'")
+        loss_text, prob_text = part.split("@", 1)
+        prob_text = prob_text.strip()
+        percent = prob_text.endswith("%")
+        loss, prob = _number(loss_text), _number(prob_text.rstrip("%"))
+        if loss is None or prob is None:
+            raise ValueError(f"'{part}' should be 'loss @ chance', e.g. '1000000 @ 10%'")
+        out.append({"loss": loss, "probability": prob / 100 if percent or prob >= 1 else prob})
+    return out
 
 
 def _split(v: Any, comma: bool = False) -> List[str]:
@@ -313,7 +343,7 @@ class ExcelExchange:
         """id -> the text written for a reference: the name, or the id where the name is not unique."""
         out: Dict[type, Dict[str, str]] = {}
         for cls, items in data.items():
-            label = (lambda e: f"{e.date} {e.id[:8]}") if cls is ControlEvent else (lambda e: e.name)
+            label = (lambda e: f"{e.date} {e.id[:8]}") if cls is ControlEvent else (lambda e: getattr(e, "name", e.id))
             counts: Dict[str, int] = {}
             for e in items:
                 counts[label(e)] = counts.get(label(e), 0) + 1
@@ -341,6 +371,8 @@ class ExcelExchange:
             return MODEL_NAMES.get(v.get("dist")) or json.dumps(v)  # custom distributions keep their JSON
         if c.kind == "spec_value":
             return v.get(c.note) if v and v.get("dist") in SPEC_FIELDS else None
+        if c.kind == "points":
+            return SEP.join(f"{p['loss']:g} @ {p['probability'] * 100:g}%" for p in v or []) or None
         return v
 
     # -- import ------------------------------------------------------------------------------------
@@ -530,6 +562,8 @@ class ExcelExchange:
             d[c.field] = int(v) if v is not None else None
         elif c.kind == "date":
             d[c.field] = _date(raw)
+        elif c.kind == "points":
+            d[c.field] = _points(raw)
         else:
             d[c.field] = _text(raw)
 

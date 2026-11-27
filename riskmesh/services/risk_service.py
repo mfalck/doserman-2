@@ -27,6 +27,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .excel import ExcelExchange
+from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
 from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
@@ -57,7 +58,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
+class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -407,7 +408,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
             self._enum(e.event_type, CONTROL_EVENT_TYPES, "event_type")
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
-        else:
+        elif not self._validate_portfolio(e):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -471,6 +472,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
         if len(units) > 1 and not cascade:
             raise ConflictError("Business unit has child units; delete with cascade=True.")
         for uid in reversed(units):  # children first
+            self._delete_unit_appetites(uid)
             self._delete(BusinessUnit, uid)
         return units
 
@@ -712,8 +714,9 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
         if not risks:
             raise ValidationError("There are no risks to simulate.")
         units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
-        return risk_model.run_simulation(self.engine_risks(risks), units,
-                                         n_trials=n_trials, seed=seed, residual=residual)
+        return risk_model.run_simulation(self.engine_risks(risks), units, n_trials=n_trials, seed=seed,
+                                         residual=residual,
+                                         correlations=self.correlation_pairs([r.id for r in risks]))
 
     def simulation_report(self, n_trials: int = 10_000, seed: Optional[int] = None,
                           residual: bool = True, unit_id: Optional[str] = None,
@@ -731,11 +734,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
                 raise ValidationError("There are no risks to analyse.")
             units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
             try:
-                report = analytic.analyse(self.engine_risks(risks), units, residual=residual)
+                report = analytic.analyse(self.engine_risks(risks), units, residual=residual,
+                                          appetites=self.appetites_for(unit_id),
+                                          correlated=len(self.correlation_pairs([r.id for r in risks])))
             except ValueError as e:
                 raise ValidationError(f"{e} (try engine='monte_carlo')") from e
         elif engine == "monte_carlo":
-            report = self.simulate(n_trials, seed, residual, unit_id).report()
+            report = self.simulate(n_trials, seed, residual, unit_id).report(appetites=self.appetites_for(unit_id))
             report["engine"] = "monte_carlo"
         else:
             raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
@@ -766,11 +771,19 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, ExcelExchange):
         # outage fields only when used, so the fingerprints of runs made before they existed stay valid
         rows = [{**{f: getattr(r, f) for f in fields}, **{f: engine[r.id][f] for f in shock if engine[r.id].get(f)}}
                 for r in risks]
-        return {
+        out = {
             "risks": sorted(rows, key=lambda r: r["id"]),
             "units": sorted(({"id": u.id, "name": u.name, "parent_id": u.parent_id}
                              for u in self.repo.list(BusinessUnit)), key=lambda u: u["id"]),
         }
+        # only when used, so the fingerprints of runs made before they existed stay valid
+        pairs = self.correlation_pairs([r.id for r in risks])
+        if pairs:
+            out["correlations"] = [list(p) for p in pairs]
+        appetites = self.appetites_for(unit_id)
+        if appetites:
+            out["appetites"] = appetites
+        return out
 
     @staticmethod
     def _run_params(mode: str, engine: str, n_trials: int, seed: Optional[int], residual: bool,
@@ -1092,7 +1105,7 @@ WRITE_METHODS = (
     "create_control", "update_control", "delete_control", "create_risk_event", "update_risk_event",
     "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
     "import_data", "label_run", "reset_all", "_store_run",
-) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
+) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS + PORTFOLIO_WRITE_METHODS
 
 
 def _write(method):

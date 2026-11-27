@@ -159,3 +159,34 @@ def test_excel_menu_round_trip(window, tmp_path, monkeypatch):
     window.export_excel()
     window.import_excel()
     assert shown and "matches the stored data" in shown[-1]
+
+
+def test_portfolio_page_checks_appetite_and_lists_correlations(window):
+    page = window.pages[window.PAGES.index("Appetite")]
+    window.nav.setCurrentRow(window.PAGES.index("Appetite"))
+    assert page.appetites.rowCount() == 2 and page.correlations.rowCount() == 3
+    statuses = {page.appetites.item(r, 0).text(): page.appetites.item(r, 3).text() for r in range(2)}
+    assert statuses == {"Group risk appetite": "within", "IT risk tolerance": "outside"}
+    assert all(page.correlations.item(r, 3).text() for r in range(3))  # achieved loss correlation shown
+
+
+def test_appetite_and_correlation_dialogs_round_trip(window):
+    from riskmesh.gui.dialogs import AppetiteDialog, CorrelationDialog
+    svc = window.svc
+    a = svc.list_appetites()[0]
+    v = AppetiteDialog(svc, a).values()
+    assert v["points"] == a.points and v["business_unit_id"] == a.business_unit_id
+    c = svc.list_correlations()[0]
+    v = CorrelationDialog(svc, c).values()
+    assert (v["risk_a_id"], v["risk_b_id"], v["coefficient"]) == (c.risk_a_id, c.risk_b_id, c.coefficient)
+
+
+def test_analysis_page_shows_appetite_and_correlation_warning(window):
+    page = window.pages[window.PAGES.index("Analysis")]
+    page.engine.setCurrentIndex(page.engine.findData("analytic"))
+    page.run(use_cache=True)
+    assert "not applied" in page.appetite_info.text() and "IT risk tolerance" in page.appetite_info.text()
+    page.engine.setCurrentIndex(page.engine.findData("monte_carlo"))
+    page.trials.setValue(5_000)
+    page.run(use_cache=True)
+    assert "correlations applied" in page.appetite_info.text()

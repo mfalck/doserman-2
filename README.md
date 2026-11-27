@@ -128,7 +128,7 @@ Risks are treated as independent of each other.
 | Precision | Grid step reported as `grid_step` (a few thousand on the demo total, finer per risk) | Sampling noise, shrinks with `n_trials` |
 | Repeatability | Always identical | Identical with the same `seed` |
 | Speed (demo) | ~1 s, independent of precision | ~2 s for 1 million years |
-| Limits | Independent risks only; the std of very heavy tails can be a few % low | Needed for correlated risks (planned) |
+| Limits | Independent risks only (reports a warning when correlations are set); the std of very heavy tails can be a few % low | Applies correlations between risks |
 
 On the demo data both agree within 0.4% for mean, P50, P90, P99 and TVaR 99
 (Monte Carlo with 1 million years). Choose with `"engine"` in
@@ -271,6 +271,73 @@ The desktop application and the web app have a *Third parties* page with the
 same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
+
+## Risk appetite and correlation
+
+### Correlation: bad years that come together
+
+Two risks can share a cause: the same attackers, a shared platform, an
+economic downturn. A **correlation** (`risk_a_id`, `risk_b_id`, `coefficient`
+from -0.99 to 0.99, `rationale`) says how strongly their bad years tend to
+coincide (0.1-0.3 weak, 0.3-0.6 moderate, above 0.6 strong; negative means
+one tends to be good when the other is bad).
+
+The Monte Carlo engine simulates every risk on its own as before and then
+reorders the simulated years (Iman & Conover, a Gaussian copula on ranks), so
+
+- each risk keeps exactly its own distribution and expected loss,
+- risks that are in no correlation are not touched,
+- the total gets a heavier tail: on the demo P99 rises from about 5.8m to 6.9m
+  when all risks are chained with 0.8.
+
+Pairwise estimates do not always fit together (A~B and B~C strong, A~C strongly
+negative); then the nearest consistent set is used and the report says
+`"adjusted": true`. The report's `correlation.pairs` also shows the correlation
+of the simulated annual losses (`achieved`). It is lower than the coefficient
+when a risk has many loss-free years, since those zeros tie.
+
+The analytic engine adds up independent risks. With correlations set it still
+calculates, but the report carries
+`"correlation": {"applied": false, ...}` and the GUI and web app say so and
+offer Monte Carlo.
+
+### Risk appetite: a tolerance curve
+
+An **appetite** is a set of points "at most this chance per year of losing more
+than this amount", for the whole organisation or for one business unit
+including its sub-units:
+
+```json
+{"name": "Group risk appetite",
+ "points": [{"loss": 1000000, "probability": 0.25}, {"loss": 5000000, "probability": 0.05},
+            {"loss": 20000000, "probability": 0.005}],
+ "statement": "Losing more than 5m at most once in 20 years"}
+```
+
+A larger loss cannot be accepted more often than a smaller one. Every report
+(both engines, inherent and residual) checks each appetite in its scope against
+the loss exceedance curve of that scope. `appetite[]` gives per point the
+accepted and the actual chance, whether it is `breached`, and the curve itself
+for plotting. A report for one unit only includes the appetites for that unit
+or units below it.
+
+```bash
+riskmesh portfolio                        # correlations and appetites
+riskmesh simulate --engine monte_carlo    # ... with "Appetite: ... within / OUTSIDE"
+```
+
+API: `/api/correlations` and `/api/appetites` (CRUD). The desktop application
+has an *Appetite* page, and the web app an *Appetite & Correlation* page. Each
+appetite is shown as its tolerance curve over the curve with controls, with a
+table of accepted vs actual chances. The *Analysis* pages draw the appetite on
+the loss exceedance curve. Correlations and appetites are part of the Excel
+workbook (sheets *Correlations* and *Appetite*, tolerance written as
+`1000000 @ 25%; 5000000 @ 5%`), the JSON export and the audit log.
+
+Both are inputs to a stored run's fingerprint only when set, so runs made before
+they existed stay valid. Changing a correlation or an appetite marks runs as
+"data changed". Deleting a risk deletes its correlations. Deleting a unit deletes
+its appetite, so it never silently becomes organisation-wide.
 
 ## Audit trail (tamper-evident)
 

@@ -61,8 +61,13 @@ def test_tvar_is_at_least_var():
 
 def test_agrees_with_monte_carlo_on_demo(svc):
     seed_demo(svc)
+    correlated = svc.simulation_report(n_trials=200_000, seed=3, engine="monte_carlo")
+    for c in svc.list_correlations():  # the analytic engine adds up independent risks
+        svc.delete_correlation(c.id)
     a = svc.simulation_report(engine="analytic")
     m = svc.simulation_report(n_trials=200_000, seed=3, engine="monte_carlo")
+    assert correlated["total"]["p99"] > m["total"]["p99"]
+    assert correlated["total"]["mean"] == pytest.approx(m["total"]["mean"])
     assert a["engine"] == "analytic" and m["engine"] == "monte_carlo"
     for key, tol in (("mean", 0.02), ("p50", 0.03), ("p90", 0.03), ("p99", 0.06)):
         assert a["total"][key] == pytest.approx(m["total"][key], rel=tol), key

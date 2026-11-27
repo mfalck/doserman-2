@@ -23,7 +23,7 @@ customers at the same time (a common shock): see consequences.py.
 """
 
 import hashlib
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from scipy import stats
@@ -288,7 +288,9 @@ class SimulationResult:
                  risk_losses: Dict[str, np.ndarray], risks: Dict[str, Dict[str, Any]],
                  business_units: Dict[str, Dict[str, Any]],
                  term_losses: Optional[Dict[str, np.ndarray]] = None,
-                 term_info: Optional[Dict[str, Dict[str, Any]]] = None):
+                 term_info: Optional[Dict[str, Dict[str, Any]]] = None,
+                 correlation: Optional[Dict[str, Any]] = None):
+        self.correlation = correlation  # what was applied (pairs with achieved loss correlation)
         self.term_losses = term_losses or {}   # annual consequence losses per customer/service key
         self.term_info = term_info or {}
         self.n_trials = n_trials
@@ -325,8 +327,12 @@ class SimulationResult:
             total += losses
         return total
 
-    def report(self, percentiles: Iterable[float] = DEFAULT_PERCENTILES) -> Dict[str, Any]:
-        """JSON-serialisable summary of the whole simulation."""
+    def prob_exceed(self, losses: np.ndarray) -> Callable[[float], float]:
+        return lambda x: float((losses > x).mean())
+
+    def report(self, percentiles: Iterable[float] = DEFAULT_PERCENTILES,
+               appetites: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """JSON-serialisable summary of the whole simulation (with appetites: whether each is kept)."""
         percentiles = tuple(percentiles)
         per_risk = []
         for risk_id, losses in self.risk_losses.items():
@@ -367,6 +373,15 @@ class SimulationResult:
         if self.term_losses:
             report["consequences"] = consequence_report(
                 {k: loss_statistics(v, percentiles) for k, v in self.term_losses.items()}, self.term_info)
+        if self.correlation:
+            report["correlation"] = self.correlation
+        if appetites:
+            from .appetite import evaluate
+            report["appetite"] = []
+            for a in appetites:
+                losses = self.unit_losses(a["business_unit_id"]) if a.get("business_unit_id") else total
+                report["appetite"].append(evaluate(a, self.prob_exceed(losses), loss_statistics(losses, percentiles),
+                                                   loss_exceedance_curve(losses)))
         return report
 
 
@@ -403,9 +418,13 @@ def _stable_key(text: str) -> int:
 def run_simulation(risks: Dict[str, Dict[str, Any]],
                    business_units: Dict[str, Dict[str, Any]],
                    n_trials: int = 10_000, seed: Optional[int] = None,
-                   residual: bool = True) -> SimulationResult:
+                   residual: bool = True,
+                   correlations: Optional[List[Tuple[str, str, float]]] = None) -> SimulationResult:
     """
-    Simulates every risk independently.
+    Simulates every risk on its own; with `correlations` (risk a, risk b,
+    coefficient) the annual losses are then reordered across trials so that
+    bad years coincide as given (see dependence.py). Pairs naming a risk that
+    is not in `risks` are ignored.
 
     With residual=True a risk's `residual_frequency` / `residual_impact`
     (after controls) is used when present, otherwise the inherent
@@ -416,7 +435,7 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
     shared_rng = np.random.default_rng(seed)
     severities, info = term_index(risks, residual)
     losses = {}
-    terms: Dict[str, np.ndarray] = {}
+    parts_by_risk: Dict[str, Dict[str, np.ndarray]] = {}
     for risk_id, risk in risks.items():
         freq = (residual and risk.get("residual_frequency")) or risk["frequency"]
         imp = (residual and risk.get("residual_impact")) or risk["impact"]
@@ -426,9 +445,23 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
         rng = (np.random.default_rng([seed, _stable_key(risk_id)])
                if seed is not None else shared_rng)
         if severities[risk_id].has_consequences:
-            losses[risk_id], parts = simulate_with_consequences(freq, severities[risk_id], n_trials, rng)
-            for key, v in parts.items():
-                terms[key] = terms.get(key, 0) + v
+            losses[risk_id], parts_by_risk[risk_id] = simulate_with_consequences(
+                freq, severities[risk_id], n_trials, rng)
         else:  # unchanged path, so risks without consequences keep exactly the same random numbers
             losses[risk_id] = simulate_annual_loss(freq, imp, n_trials, rng)
-    return SimulationResult(n_trials, seed, losses, risks, business_units, terms, info)
+    correlation = None
+    pairs = [(a, b, float(r)) for a, b, r in correlations or [] if a in risks and b in risks and a != b]
+    if pairs:
+        from . import dependence
+        rng = np.random.default_rng([seed, _stable_key("correlation")]) if seed is not None else shared_rng
+        perms, adjusted = dependence.reorder(losses, pairs, rng)
+        for rid, perm in perms.items():
+            losses[rid] = losses[rid][perm]
+            if rid in parts_by_risk:
+                parts_by_risk[rid] = {k: v[perm] for k, v in parts_by_risk[rid].items()}
+        correlation = {"applied": True, "adjusted": adjusted, "pairs": dependence.achieved(losses, pairs)}
+    terms: Dict[str, np.ndarray] = {}
+    for parts in parts_by_risk.values():
+        for key, v in parts.items():
+            terms[key] = terms.get(key, 0) + v
+    return SimulationResult(n_trials, seed, losses, risks, business_units, terms, info, correlation)

@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QInputDialog
                                QVBoxLayout, QWidget)
 
 from ..services import RiskService
-from .dialogs import ControlDialog, CustomerDialog, RiskDialog, ServiceDialog, SupplierDialog, UnitDialog
+from .dialogs import (AppetiteDialog, ControlDialog, CorrelationDialog, CustomerDialog, RiskDialog, ServiceDialog,
+                      SupplierDialog, UnitDialog)
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
 
@@ -327,6 +328,32 @@ class ControlsPage(Page):
                     self.changed()
 
 
+def appetite_summary(report: Dict[str, Any]) -> str:
+    """One line per appetite (kept or not), plus a warning when correlations were not applied."""
+    lines = []
+    corr = report.get("correlation")
+    if corr and not corr["applied"]:
+        lines.append(f"<span style='color:#b45309'>⚠ {corr['pair_count']} correlations are not applied by the "
+                     "analytic engine (it treats risks as independent). Choose Monte Carlo to include them.</span>")
+    elif corr:
+        lines.append(f"{len(corr['pairs'])} correlations applied"
+                     + (" (adjusted: the pairs did not fit together)" if corr["adjusted"] else "") + ".")
+    for a in report.get("appetite", []):
+        worst = [p for p in a["points"] if p["breached"]]
+        if worst:
+            p = max(worst, key=lambda p: p["ratio"] or 0)
+            lines.append(f"<span style='color:#dc2626'>✗ <b>{a['name']}</b>: outside – "
+                         f"{p['actual']:.1%} chance of losing more than {money(p['loss']).strip()}, "
+                         f"accepted {p['tolerance']:.1%}</span>")
+        else:
+            lines.append(f"<span style='color:#15803d'>✓ <b>{a['name']}</b>: within appetite</span>")
+    return "<br>".join(lines)
+
+
+def tolerance_text(points) -> str:
+    return "; ".join(f"> {compact(p['loss'])} at most {p['probability']:.1%}" for p in points)
+
+
 # ---------------------------------------------------------------------------
 
 class AnalysisPage(Page):
@@ -364,6 +391,9 @@ class AnalysisPage(Page):
         self.run_info = QLabel("Choose scope and method, then press Run.")
         self.run_info.setWordWrap(True)
         self.layout_.addWidget(self.run_info)
+        self.appetite_info = QLabel("")
+        self.appetite_info.setWordWrap(True)
+        self.layout_.addWidget(self.appetite_info)
 
         split = QSplitter(Qt.Vertical)
         top = QWidget()
@@ -441,6 +471,7 @@ class AnalysisPage(Page):
                  for kind, label in (("customers", "↳ penalty"), ("services", "↳ own cost")) for c in cons.get(kind, [])]
         # outage consequences are already part of the risks above; listed to show who carries them
         self.per_risk.fill(rows + extra, colors={(len(rows) + i, 0): "#f1f5f9" for i in range(len(extra))})
+        self.appetite_info.setText(appetite_summary(report["residual"]))
         self._draw_chart(report)
 
     def _draw_chart(self, report: Dict[str, Any]) -> None:
@@ -461,6 +492,20 @@ class AnalysisPage(Page):
             for p in report[key]["loss_exceedance_curve"]:
                 if p["loss"] > 0:
                     series.append(p["loss"], p["prob_exceed"] * 100)
+            chart.addSeries(series)
+            series.attachAxis(x_axis)
+            series.attachAxis(y_axis)
+        scope = self.unit.currentData()
+        for a in report["residual"].get("appetite", []):
+            if a["business_unit_id"] != scope:
+                continue  # only the appetite for exactly this scope belongs on this curve
+            series = QLineSeries()
+            series.setName(f"Appetite: {a['name']}")
+            pen = QPen(QColor("#dc2626"), 2)
+            pen.setStyle(Qt.DashLine)
+            series.setPen(pen)
+            for pt in a["points"]:
+                series.append(pt["loss"], pt["tolerance"] * 100)
             chart.addSeries(series)
             series.attachAxis(x_axis)
             series.attachAxis(y_axis)
@@ -871,6 +916,146 @@ class ThirdPartyPage(Page):
                     self.changed()
 
 
+class PortfolioPage(Page):
+    """Risk appetite (checked against the current figures) and correlations between risks."""
+
+    CHECK_TRIALS = 20_000
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Appetite and correlation"))
+        intro = QLabel("The appetite says how large losses the organisation accepts, and how often. Correlations "
+                       "say which risks tend to have bad years together; they make the tail of the total "
+                       "heavier without changing any single risk.")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        split = QSplitter(Qt.Vertical)
+
+        top = QWidget()
+        tl = QVBoxLayout(top)
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("<b>Risk appetite</b> – checked with controls"))
+        self.check_info = QLabel("")
+        self.check_info.setStyleSheet("color: #64748b")
+        bar.addWidget(self.check_info)
+        bar.addStretch()
+        for text, slot in (("New", self.add_appetite), ("Edit", self.edit_appetite), ("Delete", self.delete_appetite)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        tl.addLayout(bar)
+        self.appetites = Table(["Appetite", "Applies to", "Tolerance", "Status", "Worst point"])
+        self.appetites.doubleClicked.connect(lambda *_: self.edit_appetite())
+        tl.addWidget(self.appetites)
+        split.addWidget(top)
+
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom)
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("<b>Correlations</b> between risks"))
+        bar.addStretch()
+        for text, slot in (("New", self.add_correlation), ("Edit", self.edit_correlation),
+                           ("Delete", self.delete_correlation)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        bl.addLayout(bar)
+        self.correlations = Table(["Risk A", "Risk B", "Coefficient", "Loss correlation", "Rationale"],
+                                  numeric=[2, 3])
+        self.correlations.doubleClicked.connect(lambda *_: self.edit_correlation())
+        bl.addWidget(self.correlations)
+        split.addWidget(bottom)
+        self.layout_.addWidget(split, 1)
+
+    def refresh(self) -> None:
+        risks = {r.id: r.name for r in self.svc.list_risks()}
+        units = unit_names(self.svc)
+        corrs = self.svc.list_correlations()
+        apps = self.svc.list_appetites()
+        report = None
+        if risks and (apps or corrs):
+            engine = "monte_carlo" if corrs else "analytic"
+            report = guarded(self, lambda: self.svc.simulation_report(self.CHECK_TRIALS, 42, engine=engine))
+            self.check_info.setText("(Monte Carlo, 20,000 years, as correlations are set)" if corrs
+                                    else "(analytic engine)")
+        checked = {a["id"]: a for a in (report or {}).get("appetite", [])}
+        rows, colors = [], {}
+        for i, a in enumerate(apps):
+            c = checked.get(a.id)
+            if c is None:
+                status, worst = "–", ""
+            else:
+                status = "outside" if c["breached"] else "within"
+                colors[(i, 3)] = "#fecaca" if c["breached"] else "#bbf7d0"
+                w = max(c["points"], key=lambda p: p["ratio"] or 0)
+                worst = f"> {compact(w['loss'])}: {w['actual']:.1%} (accepted {w['tolerance']:.1%})"
+            rows.append([a.name, units.get(a.business_unit_id, "Whole organisation"), tolerance_text(a.points),
+                         status, worst])
+        self.appetites.fill(rows, keys=[a.id for a in apps], colors=colors)
+        achieved = {(p["risk_a_id"], p["risk_b_id"]): p["achieved"]
+                    for p in ((report or {}).get("correlation") or {}).get("pairs", [])}
+        self.correlations.fill(
+            [[risks.get(c.risk_a_id, "?"), risks.get(c.risk_b_id, "?"), f"{c.coefficient:.2f}",
+              f"{achieved[(c.risk_a_id, c.risk_b_id)]:.2f}" if (c.risk_a_id, c.risk_b_id) in achieved else "",
+              c.rationale or ""] for c in corrs], keys=[c.id for c in corrs])
+
+    def add_appetite(self):
+        dialog = AppetiteDialog(self.svc, parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_appetite(v.pop("name"), v.pop("points"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit_appetite(self):
+        key = self.appetites.selected_key()
+        if not key:
+            return
+        dialog = AppetiteDialog(self.svc, self.svc.get_appetite(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_appetite(key, **dialog.values())):
+                    self.changed()
+
+    def delete_appetite(self):
+        key = self.appetites.selected_key()
+        if key and QMessageBox.question(self, "Delete", f"Delete the appetite '{self.svc.get_appetite(key).name}'?") \
+                == QMessageBox.Yes:
+            if guarded(self, lambda: self.svc.delete_appetite(key)) is not None:
+                self.changed()
+
+    def add_correlation(self):
+        if len(self.svc.list_risks()) < 2:
+            QMessageBox.information(self, "Correlation", "A correlation needs at least two risks.")
+            return
+        dialog = CorrelationDialog(self.svc, parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_correlation(v.pop("risk_a_id"), v.pop("risk_b_id"), v.pop("coefficient"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit_correlation(self):
+        key = self.correlations.selected_key()
+        if not key:
+            return
+        dialog = CorrelationDialog(self.svc, self.svc.get_correlation(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_correlation(key, **dialog.values())):
+                    self.changed()
+
+    def delete_correlation(self):
+        key = self.correlations.selected_key()
+        if key and QMessageBox.question(self, "Delete", "Delete this correlation?") == QMessageBox.Yes:
+            if guarded(self, lambda: self.svc.delete_correlation(key)) is not None:
+                self.changed()
+
+
 def _editor_only(method):
     """Viewers can open pages but not change anything (double-clicks included)."""
     @functools.wraps(method)
@@ -884,6 +1069,8 @@ def _editor_only(method):
 
 for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (RisksPage, ("add", "edit", "delete")), (ControlsPage, ("add", "edit", "delete")),
-                     (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete"))):
+                     (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete")),
+                     (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
+                                      "edit_correlation", "delete_correlation"))):
     for _name in _names:
         setattr(_cls, _name, _editor_only(getattr(_cls, _name)))

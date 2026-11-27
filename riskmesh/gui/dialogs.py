@@ -3,14 +3,15 @@
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit, QSpinBox, QVBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
+                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                               QPlainTextEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
                                QWidget)
 
 from ..domain import risk_model
 from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
-                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, BusinessUnit, Control, Customer, Risk, Service,
-                             Supplier)
+                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, BusinessUnit, Control, Correlation,
+                             Customer, Risk, Service, Supplier)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 
@@ -440,6 +441,111 @@ class CustomerDialog(BaseDialog):
                 "exit_support": self.exit.isChecked(), "notes": self.notes.toPlainText().strip() or None,
                 "penalty_per_hour": _float(self.penalty), "penalty_grace_hours": _float(self.grace),
                 "penalty_cap": _float(self.cap)}
+
+
+def _risk_combo(svc: RiskService, selected: Optional[str]) -> QComboBox:
+    combo = QComboBox()
+    for r in sorted(svc.list_risks(), key=lambda r: r.name):
+        combo.addItem(r.name, r.id)
+    if selected:
+        combo.setCurrentIndex(max(0, combo.findData(selected)))
+    return combo
+
+
+class CorrelationDialog(BaseDialog):
+    """Two risks and how strongly their bad years come together."""
+
+    def __init__(self, svc: RiskService, corr: Optional[Correlation] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit correlation" if corr else "New correlation", corr is not None, parent)
+        self.risk_a = _risk_combo(svc, corr.risk_a_id if corr else None)
+        self.risk_b = _risk_combo(svc, corr.risk_b_id if corr else None)
+        if not corr and self.risk_b.count() > 1:
+            self.risk_b.setCurrentIndex(1)
+        self.coefficient = QDoubleSpinBox()
+        self.coefficient.setRange(-0.99, 0.99)
+        self.coefficient.setSingleStep(0.05)
+        self.coefficient.setDecimals(2)
+        self.coefficient.setValue(corr.coefficient if corr else 0.3)
+        hint = QLabel("0.1-0.3 weak, 0.3-0.6 moderate, above 0.6 strong. Negative: one tends to be good "
+                      "when the other is bad. Applied by the Monte Carlo engine.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #64748b")
+        self.rationale = QPlainTextEdit((corr.rationale or "") if corr else "")
+        self.rationale.setPlaceholderText("Why do they move together? e.g. same attackers, shared platform")
+        self.rationale.setFixedHeight(60)
+        for label, w in (("Risk A", self.risk_a), ("Risk B", self.risk_b), ("Coefficient", self.coefficient),
+                         ("", hint), ("Rationale", self.rationale)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        return {"risk_a_id": self.risk_a.currentData(), "risk_b_id": self.risk_b.currentData(),
+                "coefficient": round(self.coefficient.value(), 2),
+                "rationale": self.rationale.toPlainText().strip() or None}
+
+
+class AppetiteDialog(BaseDialog):
+    """A tolerance curve: at most this chance per year of losing more than this amount."""
+
+    def __init__(self, svc: RiskService, appetite: Optional[Appetite] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit risk appetite" if appetite else "New risk appetite", appetite is not None, parent)
+        a = appetite
+        self.name = QLineEdit(a.name if a else "")
+        self.unit = QComboBox()
+        self.unit.addItem("The whole organisation", None)
+        for u in svc.list_business_units():
+            self.unit.addItem(u.name, u.id)
+        if a and a.business_unit_id:
+            self.unit.setCurrentIndex(max(0, self.unit.findData(a.business_unit_id)))
+        self.owner = _person_combo(svc, a.owner_id if a else None)
+        self.points = QTableWidget(0, 2)
+        self.points.setHorizontalHeaderLabels(["Annual loss above", "At most chance per year %"])
+        self.points.horizontalHeader().setStretchLastSection(True)
+        self.points.setColumnWidth(0, 180)
+        self.points.setFixedHeight(150)
+        for p in (a.points if a else [{"loss": 1_000_000, "probability": 0.1}, {"loss": 10_000_000, "probability": 0.01}]):
+            self._add_point(p["loss"], p["probability"] * 100)
+        add, remove = QPushButton("Add point"), QPushButton("Remove selected")
+        add.clicked.connect(lambda: self._add_point(None, None))
+        remove.clicked.connect(lambda: self.points.removeRow(self.points.currentRow()))
+        buttons = QHBoxLayout()
+        buttons.addWidget(add)
+        buttons.addWidget(remove)
+        buttons.addStretch()
+        box = QWidget()
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.addWidget(self.points)
+        bl.addLayout(buttons)
+        self.statement = QPlainTextEdit((a.statement or "") if a else "")
+        self.statement.setPlaceholderText("e.g. Losing more than 10m should happen at most once in 100 years")
+        self.statement.setFixedHeight(60)
+        for label, w in (("Name", self.name), ("Applies to", self.unit), ("Owner", self.owner),
+                         ("Tolerance", box), ("Statement", self.statement)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def _add_point(self, loss, percent) -> None:
+        r = self.points.rowCount()
+        self.points.insertRow(r)
+        self.points.setItem(r, 0, QTableWidgetItem("" if loss is None else f"{loss:,.0f}"))
+        self.points.setItem(r, 1, QTableWidgetItem("" if percent is None else f"{percent:g}"))
+
+    def values(self) -> Dict[str, Any]:
+        points = []
+        for r in range(self.points.rowCount()):
+            cells = [self.points.item(r, c).text().strip() if self.points.item(r, c) else "" for c in (0, 1)]
+            if not any(cells):
+                continue
+            try:
+                loss = float(cells[0].replace(",", "").replace(" ", ""))
+                prob = float(cells[1].replace("%", "").replace(",", ".")) / 100
+            except ValueError:
+                raise ValueError(f"Tolerance row {r + 1}: enter an amount and a percentage") from None
+            points.append({"loss": loss, "probability": prob})
+        return {"name": self.name.text(), "business_unit_id": self.unit.currentData(),
+                "owner_id": self.owner.currentData(), "points": points,
+                "statement": self.statement.toPlainText().strip() or None}
 
 
 class LoginDialog(QDialog):

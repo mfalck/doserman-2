@@ -121,6 +121,13 @@ class LossDistribution:
         tail += self.x[k] * (self.cdf[k] - q)
         return tail / (1.0 - q)
 
+    def prob_exceed(self, x: float) -> float:
+        """P(annual loss > x) on the grid."""
+        k = int(np.floor(x / self.h + 1e-9))
+        if k < 0:
+            return 1.0
+        return float(max(0.0, 1.0 - self.cdf[min(k, len(self.cdf) - 1)]))
+
     def statistics(self, percentiles: Iterable[float] = DEFAULT_PERCENTILES, tail_level: float = 99) -> Dict[str, float]:
         mean = float(np.dot(self.x, self.pmf))
         var = float(np.dot((self.x - mean) ** 2, self.pmf))
@@ -181,10 +188,14 @@ def _descendants(units: Dict[str, Dict[str, Any]], unit_id: str) -> List[str]:
 
 def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str, Any]],
             residual: bool = True, n_points: int = DEFAULT_POINTS,
-            percentiles: Iterable[float] = DEFAULT_PERCENTILES) -> Dict[str, Any]:
+            percentiles: Iterable[float] = DEFAULT_PERCENTILES,
+            appetites: Optional[List[Dict[str, Any]]] = None,
+            correlated: int = 0) -> Dict[str, Any]:
     """
     Same report structure as the Monte Carlo SimulationResult.report(),
-    plus `engine` and grid information.
+    plus `engine` and grid information. The analytic engine adds up
+    independent risks; `correlated` (the number of correlation pairs among
+    these risks) is only reported, as a warning that Monte Carlo is needed.
     """
     percentiles = tuple(percentiles)
     specs = {rid: _specs(r, residual) for rid, r in risks.items()}
@@ -242,4 +253,17 @@ def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str
                      if any(t["key"] == key for t in sev.terms)]
             stats_by_key[key] = aggregate(parts, RISK_POINTS).statistics(percentiles)
         report["consequences"] = consequence_report(stats_by_key, info)
+    if correlated:
+        report["correlation"] = {"applied": False, "pair_count": correlated,
+                                 "note": "The analytic engine treats risks as independent; "
+                                         "use Monte Carlo to apply the correlations."}
+    if appetites:
+        from .appetite import evaluate
+        report["appetite"] = []
+        for a in appetites:
+            uid = a.get("business_unit_id")
+            dist = dist_of([rid for sub in _descendants(business_units, uid) for rid in by_unit.get(sub, [])]
+                           if uid else risks.keys())
+            report["appetite"].append(evaluate(a, dist.prob_exceed, dist.statistics(percentiles),
+                                               dist.exceedance_curve()))
     return report

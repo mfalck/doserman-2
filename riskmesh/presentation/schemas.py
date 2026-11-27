@@ -272,6 +272,56 @@ class SupplierOut(_Out):
     subcontractor_ids: List[str] = []
 
 
+class CorrelationCreate(_In):
+    risk_a_id: str
+    risk_b_id: str
+    coefficient: float = Field(..., ge=-0.99, le=0.99)
+    rationale: Optional[str] = None
+
+
+class CorrelationUpdate(_In):
+    risk_a_id: Optional[str] = None
+    risk_b_id: Optional[str] = None
+    coefficient: Optional[float] = Field(None, ge=-0.99, le=0.99)
+    rationale: Optional[str] = None
+
+
+class CorrelationOut(_Out):
+    risk_a_id: str
+    risk_b_id: str
+    coefficient: float
+    rationale: Optional[str] = None
+
+
+class AppetitePoint(BaseModel):
+    loss: float = Field(..., gt=0)
+    probability: float = Field(..., gt=0, lt=1)
+
+
+class AppetiteCreate(_In):
+    name: str
+    points: List[AppetitePoint]
+    business_unit_id: Optional[str] = None
+    statement: Optional[str] = None
+    owner_id: Optional[str] = None
+
+
+class AppetiteUpdate(_In):
+    name: Optional[str] = None
+    points: Optional[List[AppetitePoint]] = None
+    business_unit_id: Optional[str] = None
+    statement: Optional[str] = None
+    owner_id: Optional[str] = None
+
+
+class AppetiteOut(_Out):
+    name: str
+    points: List[Dict[str, float]] = []
+    business_unit_id: Optional[str] = None
+    statement: Optional[str] = None
+    owner_id: Optional[str] = None
+
+
 class ServiceCreate(_In):
     name: str
     business_unit_id: str

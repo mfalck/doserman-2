@@ -429,6 +429,44 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def delete_supplier(supplier_id: str):
         svc.delete_supplier(supplier_id)
 
+    @api.get("/correlations", response_model=List[s.CorrelationOut], tags=["portfolio"])
+    async def list_correlations(risk_id: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_correlations(risk_id)]
+
+    @api.post("/correlations", response_model=s.CorrelationOut, status_code=201, tags=["portfolio"])
+    async def create_correlation(body: s.CorrelationCreate):
+        d = body.model_dump()
+        return svc.create_correlation(d.pop("risk_a_id"), d.pop("risk_b_id"), d.pop("coefficient"), **d).to_dict()
+
+    @api.patch("/correlations/{correlation_id}", response_model=s.CorrelationOut, tags=["portfolio"])
+    async def update_correlation(correlation_id: str, body: s.CorrelationUpdate):
+        return svc.update_correlation(correlation_id, **_changes(body)).to_dict()
+
+    @api.delete("/correlations/{correlation_id}", status_code=204, tags=["portfolio"])
+    async def delete_correlation(correlation_id: str):
+        svc.delete_correlation(correlation_id)
+
+    @api.get("/appetites", response_model=List[s.AppetiteOut], tags=["portfolio"])
+    async def list_appetites():
+        return [x.to_dict() for x in svc.list_appetites()]
+
+    @api.post("/appetites", response_model=s.AppetiteOut, status_code=201, tags=["portfolio"])
+    async def create_appetite(body: s.AppetiteCreate):
+        d = body.model_dump()
+        return svc.create_appetite(d.pop("name"), d.pop("points"), **d).to_dict()
+
+    @api.get("/appetites/{appetite_id}", response_model=s.AppetiteOut, tags=["portfolio"])
+    async def get_appetite(appetite_id: str):
+        return svc.get_appetite(appetite_id).to_dict()
+
+    @api.patch("/appetites/{appetite_id}", response_model=s.AppetiteOut, tags=["portfolio"])
+    async def update_appetite(appetite_id: str, body: s.AppetiteUpdate):
+        return svc.update_appetite(appetite_id, **_changes(body)).to_dict()
+
+    @api.delete("/appetites/{appetite_id}", status_code=204, tags=["portfolio"])
+    async def delete_appetite(appetite_id: str):
+        svc.delete_appetite(appetite_id)
+
     @api.get("/services", response_model=List[s.ServiceOut], tags=["third parties"])
     async def list_services(business_unit_id: Optional[str] = None):
         return [x.to_dict() for x in svc.list_services(business_unit_id)]

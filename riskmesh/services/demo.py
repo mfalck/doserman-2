@@ -72,7 +72,7 @@ def seed_demo(svc: RiskService) -> None:
         category="cyber", asset_ids=[db.id], owner_id=jane.id,
         residual_frequency={"type": "poisson", "rate": 0.05}, service_ids=[portal.id, metering.id],
     )
-    svc.create_risk(
+    outage = svc.create_risk(
         it.id, "Database outage",
         frequency={"type": "poisson", "rate": 2.0},
         impact={"dist": "pert", "min": 5_000, "mode": 25_000, "max": 250_000},
@@ -100,7 +100,7 @@ def seed_demo(svc: RiskService) -> None:
         impact={"dist": "triangular", "min": 30_000, "mode": 80_000, "max": 300_000},
         category="operational", owner_id=mike.id,
     )
-    svc.create_risk(
+    churn = svc.create_risk(
         sales.id, "Major customer churn",
         frequency={"type": "bernoulli", "p": 0.2},
         impact={"dist": "pert", "min": 200_000, "mode": 600_000, "max": 2_000_000},
@@ -112,6 +112,20 @@ def seed_demo(svc: RiskService) -> None:
         impact={"dist": "lognorm_p10_p90", "p10": 1_000_000, "p90": 20_000_000},
         category="hazard", asset_ids=[office.id],
     )
+
+    # Bad years that tend to come together, and what the board accepts
+    svc.create_correlation(ransomware.id, breach.id, 0.5,
+                           rationale="Same attackers and the same weaknesses in patching and access control")
+    svc.create_correlation(ransomware.id, outage.id, 0.3, rationale="Shared database and hosting platform")
+    svc.create_correlation(breach.id, churn.id, 0.4, rationale="Customers leave after a public data breach")
+    svc.create_appetite("Group risk appetite", owner_id=john.id,
+                        points=[{"loss": 1_000_000, "probability": 0.25}, {"loss": 5_000_000, "probability": 0.05},
+                                {"loss": 20_000_000, "probability": 0.005}],
+                        statement="We accept a bad year, but losing more than 5m should happen at most "
+                                  "once in 20 years and more than 20m at most once in 200 years.")
+    svc.create_appetite("IT risk tolerance", business_unit_id=it.id, owner_id=jane.id,
+                        points=[{"loss": 500_000, "probability": 0.1}, {"loss": 2_000_000, "probability": 0.02}],
+                        statement="IT losses above 2m at most once in 50 years.")
 
     # Controls and their tests
     edr = svc.create_control(it.id, "EDR on all endpoints", control_type="PREVENTIVE",

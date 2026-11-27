@@ -181,6 +181,35 @@ class Customer(Entity):
 
 
 @dataclass
+class Correlation(Entity):
+    """
+    How strongly two risks tend to have bad years together, from -1 to 1.
+    Applied by the Monte Carlo engine as a rank (Gaussian copula) correlation
+    between the risks' annual losses; each risk's own distribution is unchanged.
+    """
+    kind: ClassVar[str] = "correlation"
+    risk_a_id: str
+    risk_b_id: str
+    coefficient: float
+    rationale: Optional[str] = None
+
+
+@dataclass
+class Appetite(Entity):
+    """
+    Risk appetite as a tolerance curve: for each loss, the highest acceptable
+    probability that the annual loss exceeds it. For the whole organisation,
+    or one business unit including its children.
+    """
+    kind: ClassVar[str] = "appetite"
+    name: str
+    business_unit_id: Optional[str] = None   # None: the whole organisation
+    points: List[Dict[str, float]] = field(default_factory=list)   # [{"loss": .., "probability": ..}]
+    statement: Optional[str] = None
+    owner_id: Optional[str] = None
+
+
+@dataclass
 class Control(Entity):
     kind: ClassVar[str] = "control"
     name: str
@@ -381,7 +410,8 @@ class PeriodFact(Entity):
 
 
 # Data entities in dependency order (referenced types first)
-DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Control, RiskEvent, ControlEvent)
+DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Correlation, Appetite, Control,
+              RiskEvent, ControlEvent)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
 VERIFIED_TYPES = DATA_TYPES + (User, ReportingPeriod)
@@ -410,4 +440,8 @@ REFERENCES = [
     (Service, "supplier_ids", Supplier, True, "DEPENDS_ON"),
     (Customer, "service_ids", Service, True, "USES"),
     (Customer, "account_owner_id", Person, False, "ACCOUNT_OWNER"),
+    (Correlation, "risk_a_id", Risk, False, "CORRELATES"),
+    (Correlation, "risk_b_id", Risk, False, "CORRELATES"),
+    (Appetite, "business_unit_id", BusinessUnit, False, "APPLIES_TO"),
+    (Appetite, "owner_id", Person, False, "OWNED_BY"),
 ]
