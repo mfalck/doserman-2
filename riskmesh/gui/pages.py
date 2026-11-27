@@ -434,8 +434,13 @@ class AnalysisPage(Page):
             f"{run['created_by']} · {status} · fingerprint <code>{run['fingerprint'][:12]}</code>")
         inh, res = report["inherent"]["total"], report["residual"]["total"]
         self.stats.fill([[label_, money(inh[k]), money(res[k]), money(inh[k] - res[k])] for k, label_ in self.STATS])
-        self.per_risk.fill([[r["name"], money(r["mean"]), money(r["p90"]), money(r["p99"]),
-                             f"{r['prob_any_loss'] * 100:.0f}%"] for r in report["residual"]["risks"]])
+        rows = [[r["name"], money(r["mean"]), money(r["p90"]), money(r["p99"]), f"{r['prob_any_loss'] * 100:.0f}%"]
+                for r in report["residual"]["risks"]]
+        cons = report["residual"].get("consequences") or {}
+        extra = [[f"{label}: {c['name']}", money(c["mean"]), money(c["p90"]), money(c["p99"]), ""]
+                 for kind, label in (("customers", "↳ penalty"), ("services", "↳ own cost")) for c in cons.get(kind, [])]
+        # outage consequences are already part of the risks above; listed to show who carries them
+        self.per_risk.fill(rows + extra, colors={(len(rows) + i, 0): "#f1f5f9" for i in range(len(extra))})
         self._draw_chart(report)
 
     def _draw_chart(self, report: Dict[str, Any]) -> None:
@@ -683,6 +688,16 @@ class ThirdPartyPage(Page):
         self.kind.currentIndexChanged.connect(self.refresh)
         bar.addWidget(self.kind)
         bar.addStretch()
+        self.stress_hours = QSpinBox()
+        self.stress_hours.setRange(1, 24 * 30)
+        self.stress_hours.setValue(24)
+        self.stress_hours.setSuffix(" h")
+        stress = QPushButton("Stress test selected")
+        stress.setToolTip("What an outage of this length costs us and our customers")
+        stress.clicked.connect(self.run_stress)
+        bar.addWidget(QLabel("Outage"))
+        bar.addWidget(self.stress_hours)
+        bar.addWidget(stress)
         for text, slot in (("New", self.add), ("Edit", self.edit), ("Delete", self.delete)):
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -783,6 +798,28 @@ class ThirdPartyPage(Page):
                       for s in e.get("suppliers", [])]
             lines += [f"  customer  {c['name']}  {', '.join(c['regulations'])}" for c in e["customers"]]
             lines += [f"  risk      {r['name']} ({r['level']})" for r in e["risks"]]
+        self.exposure.setPlainText("\n".join(lines))
+
+    def run_stress(self) -> None:
+        key = self.table.selected_key()
+        tab = self._tab()
+        if not key or tab == "Customers":
+            QMessageBox.information(self, "Stress test", "Select a supplier or a service first.")
+            return
+        hours = self.stress_hours.value()
+        st = guarded(self, lambda: self.svc.stress_test(hours, **({"supplier_id": key} if tab == "Suppliers"
+                                                                   else {"service_id": key})))
+        if not st:
+            return
+        lines = [f"{st['source']['name']} down for {hours} hours costs {money(st['total']).strip()}",
+                 f"  own cost {money(st['own_cost']).strip()}, customer penalties {money(st['penalties']).strip()}"]
+        lines += [f"  {'own cost' if r['kind'] == 'service' else 'penalty':<9} {r['name'][:32]:<33}"
+                  f"{money(r['loss']).strip():>12}" for r in st["costs"]]
+        if st["notification_deadlines_missed"]:
+            lines.append("Notification deadline shorter than the outage: "
+                         + ", ".join(st["notification_deadlines_missed"]))
+        if st["customers_without_penalty_terms"]:
+            lines.append("No penalty terms registered for: " + ", ".join(st["customers_without_penalty_terms"]))
         self.exposure.setPlainText("\n".join(lines))
 
     def _dialog(self, entity=None):

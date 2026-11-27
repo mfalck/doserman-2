@@ -380,6 +380,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
                     risk_model.validate_frequency(e.residual_frequency)
                 if e.residual_impact:
                     risk_model.build_impact_distribution(e.residual_impact)
+                for label, spec in (("outage_hours", e.outage_hours),
+                                    ("residual_outage_hours", e.residual_outage_hours)):
+                    if spec:
+                        dist = risk_model.build_impact_distribution(spec)
+                        low = float(spec["value"]) if dist is None else float(dist.ppf(0.001))
+                        if low < 0:
+                            raise ValueError(f"{label} cannot be negative")
             except (ValueError, TypeError, AttributeError) as ex:
                 raise ValidationError(f"Risk '{e.name}': {ex}") from ex
         elif isinstance(e, Control):
@@ -564,20 +571,24 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
         """Deletes the risk and its events, and unlinks it from controls."""
         self._delete(Risk, risk_id)
 
-    def risk_scores(self, risk: Risk) -> Dict[str, Any]:
-        """Derived 1-5 scores and key figures, inherent and residual."""
+    def risk_scores(self, risk: Risk, graph: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Derived 1-5 scores and key figures, inherent and residual (incl. outage consequences)."""
         s = self.scoring
-        inherent = risk_model.risk_scores(risk.frequency, risk.impact, s.likelihood_bands, s.impact_bands)
+        if risk.outage_hours or risk.residual_outage_hours:
+            graph = graph or self._graph()
+        inherent = risk_model.risk_scores(risk.frequency, self.risk_severity(risk, False, graph),
+                                          s.likelihood_bands, s.impact_bands)
         residual = risk_model.risk_scores(risk.residual_frequency or risk.frequency,
-                                          risk.residual_impact or risk.impact,
+                                          self.risk_severity(risk, True, graph),
                                           s.likelihood_bands, s.impact_bands)
         return {"inherent": inherent, "residual": residual}
 
-    def risk_view(self, risk: Risk, controls_by_risk: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
+    def risk_view(self, risk: Risk, controls_by_risk: Optional[Dict[str, List[str]]] = None,
+                  graph: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """A risk as presented to clients: stored fields + derived scores + linked controls."""
         if controls_by_risk is None:
             controls_by_risk = self._controls_by_risk()
-        return {**risk.to_dict(), "scores": self.risk_scores(risk),
+        return {**risk.to_dict(), "scores": self.risk_scores(risk, graph),
                 "control_ids": controls_by_risk.get(risk.id, [])}
 
     def _controls_by_risk(self) -> Dict[str, List[str]]:
@@ -589,7 +600,9 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
 
     def list_risk_views(self, **filters: Any) -> List[Dict[str, Any]]:
         cbr = self._controls_by_risk()
-        return [self.risk_view(r, cbr) for r in self.list_risks(**filters)]
+        risks = self.list_risks(**filters)
+        graph = self._graph() if any(r.outage_hours or r.residual_outage_hours for r in risks) else None
+        return [self.risk_view(r, cbr, graph) for r in risks]
 
     # =====================================================================
     # Controls
@@ -698,7 +711,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
         if not risks:
             raise ValidationError("There are no risks to simulate.")
         units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
-        return risk_model.run_simulation({r.id: r.to_dict() for r in risks}, units,
+        return risk_model.run_simulation(self.engine_risks(risks), units,
                                          n_trials=n_trials, seed=seed, residual=residual)
 
     def simulation_report(self, n_trials: int = 10_000, seed: Optional[int] = None,
@@ -717,7 +730,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
                 raise ValidationError("There are no risks to analyse.")
             units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
             try:
-                report = analytic.analyse({r.id: r.to_dict() for r in risks}, units, residual=residual)
+                report = analytic.analyse(self.engine_risks(risks), units, residual=residual)
             except ValueError as e:
                 raise ValidationError(f"{e} (try engine='monte_carlo')") from e
         elif engine == "monte_carlo":
@@ -747,8 +760,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
         """Exactly the data a report depends on (and nothing else)."""
         risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
         fields = ("id", "name", "business_unit_id", "frequency", "impact", "residual_frequency", "residual_impact")
+        shock = ("outage_hours", "residual_outage_hours", "consequences")
+        engine = self.engine_risks(risks)
+        # outage fields only when used, so the fingerprints of runs made before they existed stay valid
+        rows = [{**{f: getattr(r, f) for f in fields}, **{f: engine[r.id][f] for f in shock if engine[r.id].get(f)}}
+                for r in risks]
         return {
-            "risks": sorted(({f: getattr(r, f) for f in fields} for r in risks), key=lambda r: r["id"]),
+            "risks": sorted(rows, key=lambda r: r["id"]),
             "units": sorted(({"id": u.id, "name": u.name, "parent_id": u.parent_id}
                              for u in self.repo.list(BusinessUnit)), key=lambda u: u["id"]),
         }
@@ -910,7 +928,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
         risks = self.repo.list(Risk)
         units = {u.id: u for u in self.repo.list(BusinessUnit)}
         controls = self.repo.list(Control)
-        views = {r.id: self.risk_scores(r) for r in risks}
+        graph = self._graph()
+        views = {r.id: self.risk_scores(r, graph) for r in risks}
         inherent_scores = [v["inherent"]["score"] for v in views.values()]
         residual_scores = [v["residual"]["score"] for v in views.values()]
         mitigated = {rid for c in controls for rid in c.risk_ids}
@@ -976,8 +995,9 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
         for r in self.repo.list(Risk):
             risks_by_unit[r.business_unit_id].append(r)
         out = []
+        graph = self._graph()
         for u in self.list_business_units():
-            scores = [self.risk_scores(r) for r in risks_by_unit.get(u.id, [])]
+            scores = [self.risk_scores(r, graph) for r in risks_by_unit.get(u.id, [])]
             n = len(scores)
             out.append({
                 "id": u.id, "name": u.name, "code": u.code, "parent_id": u.parent_id,

@@ -109,6 +109,11 @@ class Risk(Entity):
     residual_impact: Optional[Dict[str, Any]] = None
     service_ids: List[str] = field(default_factory=list)    # services the risk can disrupt
     supplier_ids: List[str] = field(default_factory=list)   # suppliers the risk comes from
+    # How long one event takes the linked services down (hours, same spec formats as impact).
+    # With it, each event also costs the services' own hourly cost and the customers' penalties,
+    # all driven by the same duration (common shock, see consequences.py).
+    outage_hours: Optional[Dict[str, Any]] = None
+    residual_outage_hours: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -146,6 +151,7 @@ class Service(Entity):
     supplier_ids: List[str] = field(default_factory=list)
     rto_hours: Optional[float] = None            # recovery time objective
     rpo_hours: Optional[float] = None            # recovery point objective
+    outage_cost_per_hour: Optional[float] = None  # our own cost while it is down (staff, recovery, lost sales)
 
 
 @dataclass
@@ -168,6 +174,10 @@ class Customer(Entity):
     audit_rights: bool = False
     exit_support: bool = False
     notes: Optional[str] = None
+    # Contractual penalty (or service credit) for an outage: per hour beyond the grace period, up to the cap
+    penalty_per_hour: Optional[float] = None
+    penalty_grace_hours: Optional[float] = None
+    penalty_cap: Optional[float] = None          # per event
 
 
 @dataclass

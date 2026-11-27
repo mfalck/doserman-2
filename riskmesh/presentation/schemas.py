@@ -126,6 +126,9 @@ class RiskCreate(_In):
     residual_impact: Optional[Spec] = None
     service_ids: List[str] = []
     supplier_ids: List[str] = []
+    outage_hours: Optional[Spec] = Field(None, examples=[{"dist": "lognorm_p10_p90", "p10": 1, "p90": 24}],
+                                         description="duration of one event's outage, in hours")
+    residual_outage_hours: Optional[Spec] = None
 
 
 class RiskUpdate(_In):
@@ -141,6 +144,8 @@ class RiskUpdate(_In):
     residual_impact: Optional[Spec] = None
     service_ids: Optional[List[str]] = None
     supplier_ids: Optional[List[str]] = None
+    outage_hours: Optional[Spec] = None
+    residual_outage_hours: Optional[Spec] = None
 
 
 class ScoreOut(BaseModel):
@@ -171,6 +176,8 @@ class RiskOut(_Out):
     residual_impact: Optional[Spec] = None
     service_ids: List[str] = []
     supplier_ids: List[str] = []
+    outage_hours: Optional[Spec] = None
+    residual_outage_hours: Optional[Spec] = None
     scores: RiskScoresOut
     control_ids: List[str] = []
 
@@ -275,6 +282,7 @@ class ServiceCreate(_In):
     supplier_ids: List[str] = []
     rto_hours: Optional[float] = Field(None, ge=0)
     rpo_hours: Optional[float] = Field(None, ge=0)
+    outage_cost_per_hour: Optional[float] = Field(None, ge=0)
 
 
 class ServiceUpdate(_In):
@@ -287,6 +295,7 @@ class ServiceUpdate(_In):
     supplier_ids: Optional[List[str]] = None
     rto_hours: Optional[float] = Field(None, ge=0)
     rpo_hours: Optional[float] = Field(None, ge=0)
+    outage_cost_per_hour: Optional[float] = Field(None, ge=0)
 
 
 class ServiceOut(_Out):
@@ -299,6 +308,7 @@ class ServiceOut(_Out):
     supplier_ids: List[str] = []
     rto_hours: Optional[float] = None
     rpo_hours: Optional[float] = None
+    outage_cost_per_hour: Optional[float] = None
 
 
 class CustomerCreate(_In):
@@ -315,6 +325,9 @@ class CustomerCreate(_In):
     audit_rights: bool = False
     exit_support: bool = False
     notes: Optional[str] = None
+    penalty_per_hour: Optional[float] = Field(None, ge=0)
+    penalty_grace_hours: Optional[float] = Field(None, ge=0)
+    penalty_cap: Optional[float] = Field(None, ge=0)
 
 
 class CustomerUpdate(_In):
@@ -331,6 +344,9 @@ class CustomerUpdate(_In):
     audit_rights: Optional[bool] = None
     exit_support: Optional[bool] = None
     notes: Optional[str] = None
+    penalty_per_hour: Optional[float] = Field(None, ge=0)
+    penalty_grace_hours: Optional[float] = Field(None, ge=0)
+    penalty_cap: Optional[float] = Field(None, ge=0)
 
 
 class CustomerOut(_Out):
@@ -347,6 +363,9 @@ class CustomerOut(_Out):
     audit_rights: bool = False
     exit_support: bool = False
     notes: Optional[str] = None
+    penalty_per_hour: Optional[float] = None
+    penalty_grace_hours: Optional[float] = None
+    penalty_cap: Optional[float] = None
 
 
 # -- Events -----------------------------------------------------------------

@@ -194,6 +194,19 @@ def money_spin(value: float = 0.0) -> QDoubleSpinBox:
     return spin
 
 
+HOURS_DEFAULTS = {"p10": 1, "p90": 24, "min": 1, "mode": 4, "max": 48, "value": 8}
+
+
+def hours_spin(value: float = 0.0) -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    spin.setRange(0, 24 * 365)
+    spin.setDecimals(1)
+    spin.setSingleStep(1)
+    spin.setSuffix(" h")
+    spin.setValue(value)
+    return spin
+
+
 class FrequencyEditor(QWidget):
     """Events per year (Poisson) or chance per year (Bernoulli)."""
     changed = Signal()
@@ -253,18 +266,18 @@ IMPACT_LABELS = {
 
 
 class ImpactEditor(QWidget):
-    """Loss per event: one page of amount fields per distribution type."""
+    """Loss per event (or, with hours=True, outage duration): one page of fields per distribution type."""
     changed = Signal()
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, caption: str = "Loss per event", hours: bool = False):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         top = QFormLayout()
         self.kind = QComboBox()
         for key, label in IMPACT_LABELS.items():
-            self.kind.addItem(label, key)
-        top.addRow("Loss per event", self.kind)
+            self.kind.addItem(label.replace("amount", "duration") if hours else label, key)
+        top.addRow(caption, self.kind)
         layout.addLayout(top)
         self.pages = QStackedWidget()
         self.fields: Dict[str, Dict[str, QDoubleSpinBox]] = {}
@@ -274,7 +287,7 @@ class ImpactEditor(QWidget):
             form.setContentsMargins(0, 0, 0, 0)
             self.fields[key] = {}
             for name, label, default in specs:
-                spin = money_spin(default)
+                spin = hours_spin(HOURS_DEFAULTS.get(name, 4)) if hours else money_spin(default)
                 spin.valueChanged.connect(self.changed)
                 form.addRow(label, spin)
                 self.fields[key][name] = spin

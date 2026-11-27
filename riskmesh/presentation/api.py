@@ -390,6 +390,16 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         """Concentration (who depends on which supplier and service) and review findings."""
         return svc.third_party_overview()
 
+    @api.get("/third-parties/stress-test", tags=["third parties"])
+    async def stress_test(hours: float, supplier_id: Optional[str] = None, service_id: Optional[str] = None):
+        """What an outage of exactly `hours` costs per service and customer if a supplier or service goes down."""
+        return svc.stress_test(hours, supplier_id=supplier_id, service_id=service_id)
+
+    @api.get("/risks/{risk_id}/consequences", tags=["third parties"])
+    async def risk_consequences(risk_id: str):
+        """The services and customers one event of the risk costs money, per hour of outage."""
+        return svc.consequence_terms(svc.get_risk(risk_id))
+
     @api.get("/suppliers", response_model=List[s.SupplierOut], tags=["third parties"])
     async def list_suppliers(tier: Optional[str] = None):
         return [x.to_dict() for x in svc.list_suppliers(tier)]

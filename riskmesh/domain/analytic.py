@@ -23,7 +23,10 @@ a fine grid and the total a coarser one. Accuracy is limited only by the
 grid step h (reported as `grid_step`), not by sampling noise, and the same
 input always gives exactly the same output.
 
-Assumes independent risks. Correlated risks need the Monte Carlo engine.
+Risks are independent of each other. Within one event, a risk's consequences
+for several services and customers share one outage duration (common shock,
+see consequences.py); that is part of the event's loss distribution, so the
+method above still applies unchanged.
 """
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -31,7 +34,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 from scipy import stats
 
-from .risk_model import DEFAULT_PERCENTILES, build_impact_distribution, validate_frequency
+from .consequences import Severity
+from .risk_model import DEFAULT_PERCENTILES, build_impact_distribution, consequence_report, term_index, validate_frequency
 
 SEVERITY_EPS = 1e-6       # severity tail beyond this quantile is collapsed onto it
 COUNT_EPS = 1e-9          # P(more events than the grid allows for)
@@ -40,17 +44,20 @@ ENGINE_VERSION = "analytic-1"  # bump when results change, so stored runs are no
 RISK_POINTS = 2 ** 18     # grid size for a single risk
 
 
-def _specs(risk: Dict[str, Any], residual: bool) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _specs(risk: Dict[str, Any], residual: bool) -> Tuple[Dict[str, Any], Any]:
     freq = (residual and risk.get("residual_frequency")) or risk["frequency"]
-    imp = (residual and risk.get("residual_impact")) or risk["impact"]
-    return freq, imp
+    sev = Severity.from_risk(risk, residual)
+    return freq, (sev if sev.has_consequences else sev.impact)
 
 
-def _upper_bound(freq: Dict[str, Any], impact: Dict[str, Any]) -> float:
+def _upper_bound(freq: Dict[str, Any], impact) -> float:
     """A loss level the risk's annual loss exceeds with probability ~TAIL_EPS."""
     validate_frequency(freq)
-    dist = build_impact_distribution(impact)
-    x_cap = float(impact["value"]) if dist is None else float(dist.ppf(1 - SEVERITY_EPS))
+    if isinstance(impact, Severity):
+        x_cap = impact.impact_cap(SEVERITY_EPS) + impact.consequence_cap()
+    else:
+        dist = build_impact_distribution(impact)
+        x_cap = float(impact["value"]) if dist is None else float(dist.ppf(1 - SEVERITY_EPS))
     if freq["type"] == "poisson":
         n_cap = max(1.0, float(stats.poisson.ppf(1 - COUNT_EPS, float(freq["rate"]))))
     else:
@@ -61,8 +68,10 @@ def _upper_bound(freq: Dict[str, Any], impact: Dict[str, Any]) -> float:
     return bound
 
 
-def _severity_pmf(impact: Dict[str, Any], h: float, n: int) -> np.ndarray:
+def _severity_pmf(impact, h: float, n: int) -> np.ndarray:
     """Severity probabilities on 0, h, ..., (n-1)h (rounding method, tail on the last point)."""
+    if isinstance(impact, Severity):
+        return impact.pmf(h, n, SEVERITY_EPS)
     pmf = np.zeros(n)
     dist = build_impact_distribution(impact)
     if dist is None:
@@ -214,7 +223,7 @@ def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str
 
     total = dist_of(risks.keys())
     total_stats = total.statistics(percentiles)
-    return {
+    report = {
         "engine": "analytic",
         "n_trials": None,
         "seed": None,
@@ -225,3 +234,12 @@ def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str
         "risks": per_risk,
         "business_units": per_unit,
     }
+    severities, info = term_index(risks, residual)
+    if info:  # the consequences per customer / service, each summed over the risks that cause them
+        stats_by_key = {}
+        for key in info:
+            parts = [(specs[rid][0], sev.only([key])) for rid, sev in severities.items()
+                     if any(t["key"] == key for t in sev.terms)]
+            stats_by_key[key] = aggregate(parts, RISK_POINTS).statistics(percentiles)
+        report["consequences"] = consequence_report(stats_by_key, info)
+    return report

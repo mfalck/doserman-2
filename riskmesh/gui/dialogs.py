@@ -129,6 +129,22 @@ class RiskDialog(BaseDialog):
         lay2.addWidget(self.res_impact)
         self.layout_.addWidget(self.residual_box)
 
+        self.has_outage = QCheckBox("An event takes services down (costs us and our customers per hour)")
+        self.layout_.addWidget(self.has_outage)
+        self.outage_box = QGroupBox("Third parties and outage")
+        lay3 = QVBoxLayout(self.outage_box)
+        self.outage = ImpactEditor(caption="Outage duration", hours=True)
+        self.res_outage = ImpactEditor(caption="After controls", hours=True)
+        lay3.addWidget(self.outage)
+        lay3.addWidget(self.res_outage)
+        tp = QFormLayout()
+        self.services = _check_list(svc.list_services(), set(risk.service_ids) if risk else set(), height=80)
+        self.suppliers = _check_list(svc.list_suppliers(), set(risk.supplier_ids) if risk else set(), height=80)
+        tp.addRow("Disrupts services", self.services)
+        tp.addRow("Comes from suppliers", self.suppliers)
+        lay3.addLayout(tp)
+        self.layout_.addWidget(self.outage_box)
+
         self.preview = QLabel()
         self.preview.setWordWrap(True)
         self.preview.setTextFormat(Qt.RichText)
@@ -144,6 +160,16 @@ class RiskDialog(BaseDialog):
         else:
             self.freq.set_spec({"type": "poisson", "rate": 0.5})
             self.res_freq.set_spec({"type": "poisson", "rate": 0.5})
+        if risk and (risk.outage_hours or risk.residual_outage_hours):
+            self.has_outage.setChecked(True)
+            self.outage.set_spec(risk.outage_hours or risk.residual_outage_hours)
+            self.res_outage.set_spec(risk.residual_outage_hours or risk.outage_hours)
+        for editor in (self.outage, self.res_outage):
+            editor.setEnabled(self.has_outage.isChecked())
+        self.has_outage.toggled.connect(lambda on: (self.outage.setEnabled(on), self.res_outage.setEnabled(on),
+                                                    self._update_preview()))
+        for editor in (self.outage, self.res_outage):
+            editor.changed.connect(self._update_preview)
         self.residual_box.setVisible(self.has_residual.isChecked())
         self.has_residual.toggled.connect(lambda on: (self.residual_box.setVisible(on), self._update_preview(),
                                                       self.adjustSize()))
@@ -154,6 +180,12 @@ class RiskDialog(BaseDialog):
 
     def _score_text(self, label: str, freq: Dict[str, Any], impact: Dict[str, Any]) -> str:
         try:
+            if self.has_outage.isChecked():  # incl. what the outage costs the linked services and customers
+                v = self.values()
+                probe = Risk(name="preview", business_unit_id=v["business_unit_id"] or "", frequency=freq,
+                             impact=impact, service_ids=v["service_ids"], supplier_ids=v["supplier_ids"],
+                             outage_hours=self.res_outage.spec() if label == "Residual" else self.outage.spec())
+                impact = self.svc.risk_severity(probe, False)
             s = risk_model.risk_scores(freq, impact, self.svc.scoring.likelihood_bands, self.svc.scoring.impact_bands)
         except (ValueError, TypeError) as e:
             return f"<b>{label}:</b> <span style='color:#b91c1c'>{e}</span>"
@@ -180,6 +212,11 @@ class RiskDialog(BaseDialog):
             "impact": self.impact.spec(),
             "residual_frequency": self.res_freq.spec() if residual else None,
             "residual_impact": self.res_impact.spec() if residual else None,
+            "service_ids": _checked(self.services),
+            "supplier_ids": _checked(self.suppliers),
+            "outage_hours": self.outage.spec() if self.has_outage.isChecked() else None,
+            "residual_outage_hours": (self.res_outage.spec() if self.has_outage.isChecked()
+                                      and self.res_outage.spec() != self.outage.spec() else None),
         }
 
 
@@ -330,13 +367,16 @@ class ServiceDialog(BaseDialog):
         self.owner = _person_combo(svc, s.owner_id if s else None)
         self.rto = _hours(s.rto_hours if s else None)
         self.rpo = _hours(s.rpo_hours if s else None)
+        self.cost = QLineEdit("" if not s or s.outage_cost_per_hour is None else f"{s.outage_cost_per_hour:g}")
+        self.cost.setPlaceholderText("our own cost per hour while it is down")
         self.suppliers = _check_list(svc.list_suppliers(), set(s.supplier_ids) if s else set())
         self.assets = _check_list(svc.list_assets(), set(s.asset_ids) if s else set(), height=90)
         self.description = QPlainTextEdit((s.description or "") if s else "")
         self.description.setFixedHeight(50)
         for label, w in (("Name", self.name), ("Delivered by", self.unit), ("Criticality", self.criticality),
                          ("Owner", self.owner), ("Recovery time (RTO)", self.rto),
-                         ("Recovery point (RPO)", self.rpo), ("Depends on suppliers", self.suppliers),
+                         ("Recovery point (RPO)", self.rpo), ("Outage cost per hour", self.cost),
+                         ("Depends on suppliers", self.suppliers),
                          ("Runs on assets", self.assets), ("Description", self.description)):
             self.form.addRow(label, w)
         self.finish()
@@ -345,6 +385,7 @@ class ServiceDialog(BaseDialog):
         return {"name": self.name.text(), "business_unit_id": self.unit.currentData(),
                 "criticality": self.criticality.currentData(), "owner_id": self.owner.currentData(),
                 "rto_hours": _float(self.rto), "rpo_hours": _float(self.rpo),
+                "outage_cost_per_hour": _float(self.cost),
                 "supplier_ids": _checked(self.suppliers), "asset_ids": _checked(self.assets),
                 "description": self.description.toPlainText().strip() or None}
 
@@ -375,11 +416,18 @@ class CustomerDialog(BaseDialog):
         self.exit.setChecked(bool(c and c.exit_support))
         self.notes = QPlainTextEdit((c.notes or "") if c else "")
         self.notes.setFixedHeight(50)
+        self.penalty = QLineEdit("" if not c or c.penalty_per_hour is None else f"{c.penalty_per_hour:g}")
+        self.penalty.setPlaceholderText("per hour of outage")
+        self.grace = _hours(c.penalty_grace_hours if c else None)
+        self.grace.setPlaceholderText("hours before the penalty starts")
+        self.cap = QLineEdit("" if not c or c.penalty_cap is None else f"{c.penalty_cap:g}")
+        self.cap.setPlaceholderText("maximum per outage (empty = no cap)")
         for label, w in (("Name", self.name), ("Sector", self.sector), ("Regulation", self.regulations),
                          ("", self.critical), ("Uses services", self.services), ("Account owner", self.owner),
                          ("Contract value", self.value), ("Contract end", self.contract_end),
                          ("Notify incidents within", self.notify), ("Contract grants", self.audit),
-                         ("", self.exit), ("Notes", self.notes)):
+                         ("", self.exit), ("Penalty", self.penalty), ("Penalty after", self.grace),
+                         ("Penalty cap", self.cap), ("Notes", self.notes)):
             self.form.addRow(label, w)
         self.finish()
 
@@ -389,7 +437,9 @@ class CustomerDialog(BaseDialog):
                 "service_ids": _checked(self.services), "account_owner_id": self.owner.currentData(),
                 "contract_value": _float(self.value), "contract_end": self.contract_end.text().strip() or None,
                 "notification_hours": _float(self.notify), "audit_rights": self.audit.isChecked(),
-                "exit_support": self.exit.isChecked(), "notes": self.notes.toPlainText().strip() or None}
+                "exit_support": self.exit.isChecked(), "notes": self.notes.toPlainText().strip() or None,
+                "penalty_per_hour": _float(self.penalty), "penalty_grace_hours": _float(self.grace),
+                "penalty_cap": _float(self.cap)}
 
 
 class LoginDialog(QDialog):

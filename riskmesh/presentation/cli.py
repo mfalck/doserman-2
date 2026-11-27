@@ -23,7 +23,6 @@ from typing import Any, Dict, List
 
 from ..bootstrap import make_service
 from ..config import FILE_NAME, load_settings, user_config_dir, write_template
-from ..domain import risk_model
 from ..domain.errors import DomainError, NotFoundError, ValidationError
 from ..services import RiskService
 from ..services.demo import seed_demo
@@ -57,6 +56,13 @@ def print_report(report: Dict[str, Any], title: str) -> None:
         ru = u["rolled_up"]
         if ru["mean"] > 0:
             print(f"{u['name'][:31]:<32}{money(ru['mean'])}{money(ru['p90'])}{money(ru['p99'])}")
+
+    cons = report.get("consequences")
+    if cons:
+        print(f"\n{'Outage consequences':<32}{'EAL':>14}{'P90':>14}{'P99':>14}  (included above)")
+        for kind, label in (("customers", "penalty"), ("services", "own cost")):
+            for c in cons[kind]:
+                print(f"{(label + ' ' + c['name'])[:31]:<32}{money(c['mean'])}{money(c['p90'])}{money(c['p99'])}")
 
 
 def print_tree(nodes: List[Dict[str, Any]], indent: int = 0) -> None:
@@ -134,6 +140,20 @@ def _third_party(args, svc: RiskService) -> int:
             print(f"  depends on     {x['name']} ({x['tier']}, {level})")
         for c in e["customers"]:
             print(f"  customer       {c['name']} {', '.join(c['regulations'])}")
+    elif cmd == "stress":
+        sup, ser = _find(svc.list_suppliers(), args.name), _find(svc.list_services(), args.name)
+        if not sup and not ser:
+            print(f"Error: no supplier or service called {args.name!r}", file=sys.stderr)
+            return 1
+        st = svc.stress_test(args.hours, supplier_id=sup.id if sup else None, service_id=ser.id if ser else None)
+        print(f"{st['source']['name']} down for {args.hours:g} hours: total{money(st['total'])}")
+        for row in st["costs"]:
+            what = "own cost" if row["kind"] == "service" else "penalty"
+            print(f"  {what:<9} {row['name'][:30]:<31}{money(row['loss'])}")
+        if st["notification_deadlines_missed"]:
+            print("  Notification deadline shorter than the outage: " + ", ".join(st["notification_deadlines_missed"]))
+        if st["customers_without_penalty_terms"]:
+            print("  No penalty terms registered for: " + ", ".join(st["customers_without_penalty_terms"]))
     elif cmd == "customer":
         c = _find(svc.list_customers(), args.name)
         if not c:
@@ -239,6 +259,9 @@ def build_parser() -> argparse.ArgumentParser:
     tpe.add_argument("name", help="supplier or service name (or id)")
     tpc = tp_sub.add_parser("customer", help="what a customer depends on")
     tpc.add_argument("name", help="customer name (or id)")
+    tps = tp_sub.add_parser("stress", help="what an outage of N hours costs (own cost and penalties)")
+    tps.add_argument("name", help="supplier or service name (or id)")
+    tps.add_argument("hours", type=float)
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
@@ -424,8 +447,7 @@ def run(args, svc: RiskService) -> int:
         units = {u.id: u.name for u in svc.list_business_units()}
         print(f"{'Risk':<28}{'Unit':<22}{'Category':<13}{'EAL (residual)':>15}")
         for r in svc.list_risks():
-            eal = risk_model.expected_annual_loss(r.residual_frequency or r.frequency,
-                                                  r.residual_impact or r.impact)
+            eal = svc.risk_scores(r)["residual"]["expected_annual_loss"]  # incl. outage consequences
             print(f"{r.name[:27]:<28}{units.get(r.business_unit_id, '?')[:21]:<22}"
                   f"{(r.category or '')[:12]:<13}{eal:>15,.0f}")
 

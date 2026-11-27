@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Set
 
+from ..domain import consequences
 from ..domain.errors import ValidationError
 from ..domain.models import (REGULATIONS, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Control, Customer, Risk,
                              Service, Supplier)
@@ -44,6 +45,7 @@ class ThirdParty:
             self._enum(e.criticality, SERVICE_CRITICALITIES, "criticality")
             self._non_negative(e.rto_hours, "rto_hours")
             self._non_negative(e.rpo_hours, "rpo_hours")
+            self._non_negative(e.outage_cost_per_hour, "outage_cost_per_hour")
             e.asset_ids = list(dict.fromkeys(e.asset_ids or []))
             e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
         elif isinstance(e, Customer):
@@ -56,6 +58,8 @@ class ThirdParty:
                     self._date(getattr(e, f), f)
             self._non_negative(e.contract_value, "contract_value")
             self._non_negative(e.notification_hours, "notification_hours")
+            for f in ("penalty_per_hour", "penalty_grace_hours", "penalty_cap"):
+                self._non_negative(getattr(e, f), f)
             e.service_ids = list(dict.fromkeys(e.service_ids or []))
 
     # -- suppliers --------------------------------------------------------------------------
@@ -192,10 +196,10 @@ class ThirdParty:
             "shortest_notification_hours": min(deadlines) if deadlines else None,
         }
 
-    def _risk_briefs(self, risks: List[Risk]) -> List[Dict[str, Any]]:
+    def _risk_briefs(self, risks: List[Risk], g: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         out = []
         for r in sorted(risks, key=lambda r: r.name):
-            sc = self.risk_scores(r)
+            sc = self.risk_scores(r, g)
             out.append({"id": r.id, "name": r.name, "category": r.category,
                         "expected_annual_loss": sc["residual"]["expected_annual_loss"],
                         "level": sc["residual"]["level"]})
@@ -215,7 +219,7 @@ class ThirdParty:
             "services": sorted(({"id": s, "name": g["services"][s].name, "criticality": g["services"][s].criticality,
                                  "depth": d} for s, d in hit.items()), key=lambda x: x["name"]),
             "subcontractors": self._chain_list(supplier.subcontractor_ids, g),
-            "risks": self._risk_briefs(risks),             # risks that originate at this supplier
+            "risks": self._risk_briefs(risks, g),             # risks that originate at this supplier
             **self._impact_summary(hit, g),
         }
 
@@ -228,7 +232,7 @@ class ThirdParty:
         return {
             "service": service.to_dict(),
             "suppliers": self._chain_list(service.supplier_ids, g),
-            "risks": self._risk_briefs(risks),
+            "risks": self._risk_briefs(risks, g),
             **self._impact_summary([service_id], g),
         }
 
@@ -259,7 +263,7 @@ class ThirdParty:
             "services": [{"id": s.id, "name": s.name, "criticality": s.criticality, "rto_hours": s.rto_hours,
                           "rpo_hours": s.rpo_hours, "supplier_ids": s.supplier_ids} for s in services],
             "suppliers": self._chain_list(supplier_ids, g),
-            "risks": self._risk_briefs(risks),
+            "risks": self._risk_briefs(risks, g),
             "controls": sorted(({"id": c.id, "name": c.name, "control_type": c.control_type,
                                  "implementation_status": c.implementation_status,
                                  "effectiveness_rating": c.effectiveness_rating,
@@ -365,6 +369,93 @@ class ThirdParty:
                 add("low", c, "customer", "Uses no registered service")
         rank = {"high": 0, "medium": 1, "low": 2}
         return sorted(out, key=lambda f: (rank[f["severity"]], f["entity_type"], f["name"]))
+
+
+    # -- common shock: what an outage costs us and our customers ---------------------------------
+
+    def _services_disrupted(self, risk: Risk, g: Dict[str, Any]) -> Set[str]:
+        """Services a risk takes down: the ones named, and those behind each named supplier's chain."""
+        hit = {s for s in risk.service_ids if s in g["services"]}
+        for sup in risk.supplier_ids:
+            hit |= set(self._service_ids_hit_by_supplier(sup, g))
+        return hit
+
+    def _terms_for_services(self, service_ids, g: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Consequence terms of an outage of these services: their own hourly cost, and each affected
+        customer's penalty once (a customer using two of them is still down once)."""
+        terms = []
+        for sid in sorted(service_ids, key=lambda s: g["services"][s].name):
+            s = g["services"][sid]
+            if s.outage_cost_per_hour:
+                terms.append({"key": f"service:{sid}", "kind": "service", "id": sid, "name": s.name,
+                              "per_hour": s.outage_cost_per_hour, "grace": 0.0, "cap": None})
+        customers = {cid for sid in service_ids for cid in g["customers_of"].get(sid, ())}
+        for cid in sorted(customers, key=lambda c: g["customers"][c].name):
+            c = g["customers"][cid]
+            if c.penalty_per_hour:
+                terms.append({"key": f"customer:{cid}", "kind": "customer", "id": cid, "name": c.name,
+                              "per_hour": c.penalty_per_hour, "grace": c.penalty_grace_hours or 0.0,
+                              "cap": c.penalty_cap})
+        return terms
+
+    def consequence_terms(self, risk: Risk, g: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """What one event of the risk costs per hour of outage, per service and customer (empty without outage_hours)."""
+        if not (risk.outage_hours or risk.residual_outage_hours):
+            return []
+        g = g or self._graph()
+        return self._terms_for_services(self._services_disrupted(risk, g), g)
+
+    def engine_risk(self, risk: Risk, g: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """The risk as the calculation engines see it: its fields plus resolved consequences."""
+        d = risk.to_dict()
+        terms = self.consequence_terms(risk, g)
+        if terms:
+            d["consequences"] = {"terms": terms}
+        return d
+
+    def engine_risks(self, risks: List[Risk]) -> Dict[str, Dict[str, Any]]:
+        g = self._graph() if any(r.outage_hours or r.residual_outage_hours for r in risks) else None
+        return {r.id: self.engine_risk(r, g) for r in risks}
+
+    def risk_severity(self, risk: Risk, residual: bool, g: Optional[Dict[str, Any]] = None):
+        """The loss of one event incl. consequences (a spec, or a Severity when there are consequences)."""
+        sev = consequences.Severity.from_risk(self.engine_risk(risk, g), residual)
+        return sev if sev.has_consequences else sev.impact
+
+    def stress_test(self, hours: float, supplier_id: Optional[str] = None,
+                    service_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        What an outage of exactly `hours` costs if a supplier (with everything behind it) or a
+        service goes down: our own cost per service and the penalty per customer.
+        """
+        if hours is None or hours < 0:
+            raise ValidationError("hours must be 0 or more.")
+        if bool(supplier_id) == bool(service_id):
+            raise ValidationError("Give either a supplier or a service.")
+        g = self._graph()
+        if supplier_id:
+            source = self.get_supplier(supplier_id)
+            services = set(self._service_ids_hit_by_supplier(supplier_id, g))
+        else:
+            source = self.get_service(service_id)
+            services = {service_id}
+        rows = consequences.stress(self._terms_for_services(services, g), hours)
+        affected = {cid for sid in services for cid in g["customers_of"].get(sid, ())}
+        no_terms = sorted(g["customers"][c].name for c in affected
+                          if not g["customers"][c].penalty_per_hour)
+        return {
+            "source": {"id": source.id, "name": source.name, "kind": "supplier" if supplier_id else "service"},
+            "hours": hours,
+            "services": [{"id": s, "name": g["services"][s].name} for s in sorted(services)],
+            "costs": rows,
+            "own_cost": sum(r["loss"] for r in rows if r["kind"] == "service"),
+            "penalties": sum(r["loss"] for r in rows if r["kind"] == "customer"),
+            "total": sum(r["loss"] for r in rows),
+            "customers_without_penalty_terms": no_terms,
+            "notification_deadlines_missed": sorted(
+                g["customers"][c].name for c in affected
+                if g["customers"][c].notification_hours is not None and g["customers"][c].notification_hours < hours),
+        }
 
 
 THIRD_PARTY_WRITE_METHODS = (

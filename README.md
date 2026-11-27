@@ -234,8 +234,42 @@ riskmesh third-party exposure "Nordic Cloud A/S"
 riskmesh third-party customer "East Savings Bank"
 ```
 
+### Outages: one event, losses at many customers (common shock)
+
+A risk can say how long one event takes its services down (`outage_hours`,
+a distribution in hours, same formats as an impact; `residual_outage_hours`
+after controls). Services have our own cost per hour (`outage_cost_per_hour`),
+customers a contractual penalty per hour after a grace period, up to a cap
+(`penalty_per_hour`, `penalty_grace_hours`, `penalty_cap`). One event then costs
+
+```
+impact  +  Σ services  cost/hour × D  +  Σ customers  min(cap, penalty/hour × max(0, D − grace))
+```
+
+with **one** duration D drawn per event and shared by everyone it hits: the
+services the risk names, and every service behind a supplier it names
+(including through subcontractors). So an outage of a supplier behind three
+customers costs all three penalties at once, and the tail of the loss
+distribution shows that concentration instead of averaging it away as
+independent risks would. Both engines handle it (the analytic engine exactly
+on its grid); reports list the annual consequences per customer and service
+under `consequences`, and the derived 1-5 scores include them.
+
+`/api/third-parties/stress-test?hours=24&supplier_id=...` (or `service_id`)
+gives the deterministic cost of an outage of a given length, per service and
+customer, and names customers whose notification deadline is shorter than the
+outage:
+
+```bash
+riskmesh third-party stress "Nordic Cloud A/S" 24
+```
+
+Risks without `outage_hours` are calculated exactly as before, so stored runs
+of existing data stay valid.
+
 The desktop application and the web app have a *Third parties* page with the
-same views. The regulatory findings are a checklist, not legal advice: confirm
+same views, the stress test for a selected supplier or service, and the
+outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
 ## Audit trail (tamper-evident)

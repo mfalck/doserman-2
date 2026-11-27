@@ -46,20 +46,24 @@ def seed_demo(svc: RiskService) -> None:
                                certifications=["ISO 27001"])
     portal = svc.create_service(dev.id, "Citizen self-service portal", criticality="CRITICAL",
                                 owner_id=david.id, asset_ids=[webapp.id, db.id],
-                                supplier_ids=[hosting.id, mail.id], rto_hours=4, rpo_hours=1,
+                                supplier_ids=[hosting.id, mail.id], rto_hours=4, rpo_hours=1, outage_cost_per_hour=3_000,
                                 description="SaaS portal our customers offer to their citizens")
     metering = svc.create_service(it.id, "Meter data hub", criticality="HIGH", owner_id=jane.id,
-                                  asset_ids=[db.id], supplier_ids=[hosting.id], rto_hours=8, rpo_hours=0.25)
+                                  asset_ids=[db.id], supplier_ids=[hosting.id], rto_hours=8, rpo_hours=0.25,
+                                  outage_cost_per_hour=2_000)
     payroll = svc.create_service(finance.id, "Payroll processing", criticality="MEDIUM", owner_id=john.id)
     svc.create_customer("North Municipality", sector="municipal", regulations=["NIS2_IMPORTANT", "GDPR"],
                         service_ids=[portal.id, payroll.id], contract_value=1_800_000, notification_hours=24,
-                        audit_rights=True, account_owner_id=robert.id, contract_end="2028-06-30")
+                        audit_rights=True, account_owner_id=robert.id, contract_end="2028-06-30",
+                        penalty_per_hour=2_500, penalty_grace_hours=8, penalty_cap=150_000)
     svc.create_customer("South Energy Grid", sector="energy", regulations=["NIS2_ESSENTIAL", "CER"],
                         service_ids=[metering.id], contract_value=3_200_000, notification_hours=12,
-                        audit_rights=True, exit_support=True, account_owner_id=robert.id)
+                        audit_rights=True, exit_support=True, account_owner_id=robert.id,
+                        penalty_per_hour=10_000, penalty_grace_hours=2, penalty_cap=500_000)
     svc.create_customer("East Savings Bank", sector="finance", regulations=["DORA", "GDPR"],
                         service_ids=[portal.id], contract_value=2_400_000, critical_function=True,
-                        notification_hours=4, audit_rights=True, account_owner_id=robert.id)
+                        notification_hours=4, audit_rights=True, account_owner_id=robert.id,
+                        penalty_per_hour=8_000, penalty_grace_hours=4, penalty_cap=400_000)
 
     ransomware = svc.create_risk(
         it.id, "Ransomware attack",
@@ -73,7 +77,9 @@ def seed_demo(svc: RiskService) -> None:
         frequency={"type": "poisson", "rate": 2.0},
         impact={"dist": "pert", "min": 5_000, "mode": 25_000, "max": 250_000},
         category="operational", asset_ids=[db.id], owner_id=jane.id,
-        service_ids=[portal.id, metering.id], supplier_ids=[hosting.id],
+        supplier_ids=[hosting.id],
+        outage_hours={"dist": "lognorm_p10_p90", "p10": 1, "p90": 24},
+        residual_outage_hours={"dist": "lognorm_p10_p90", "p10": 0.5, "p90": 8},
     )
     breach = svc.create_risk(
         dev.id, "Web app data breach",

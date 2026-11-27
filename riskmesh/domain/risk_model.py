@@ -18,6 +18,8 @@ A risk is described by two distributions:
 Annual loss for one risk = sum of `impact` over `frequency` events.
 Risks are simulated independently with Monte Carlo and can be rolled up
 by business unit (including child units) and for the whole organisation.
+An event can also take services down for a while and so cost us and our
+customers at the same time (a common shock): see consequences.py.
 """
 
 import hashlib
@@ -114,10 +116,12 @@ def sample_impact(spec: Dict[str, Any], n: int, rng: np.random.Generator) -> np.
     return np.asarray(dist.rvs(size=n, random_state=rng), dtype=float)
 
 
-def expected_annual_loss(frequency: Dict[str, Any], impact: Dict[str, Any]) -> float:
-    """Analytical expected annual loss (E[N] * E[X])."""
+def expected_annual_loss(frequency: Dict[str, Any], impact) -> float:
+    """Analytical expected annual loss (E[N] * E[X]). `impact` is a spec or a consequences.Severity."""
     validate_frequency(frequency)
     en = float(frequency["rate"]) if frequency["type"] == "poisson" else float(frequency["p"])
+    if hasattr(impact, "mean"):
+        return en * impact.mean()
     dist = build_impact_distribution(impact)
     ex = float(impact["value"]) if dist is None else float(dist.mean())
     return en * ex
@@ -142,8 +146,10 @@ def annual_event_probability(frequency: Dict[str, Any]) -> float:
     return float(frequency["p"])
 
 
-def typical_event_loss(impact: Dict[str, Any]) -> float:
-    """Median loss of one event."""
+def typical_event_loss(impact) -> float:
+    """Median loss of one event. `impact` is a spec or a consequences.Severity."""
+    if hasattr(impact, "median"):
+        return impact.median()
     dist = build_impact_distribution(impact)
     return float(impact["value"]) if dist is None else float(dist.median())
 
@@ -166,7 +172,7 @@ def severity_level(score: int) -> str:
     return "Very Low"
 
 
-def risk_scores(frequency: Dict[str, Any], impact: Dict[str, Any],
+def risk_scores(frequency: Dict[str, Any], impact,
                 likelihood_bands=DEFAULT_LIKELIHOOD_BANDS,
                 impact_bands=DEFAULT_IMPACT_BANDS) -> Dict[str, Any]:
     likelihood = to_band(annual_event_probability(frequency), likelihood_bands)
@@ -227,6 +233,16 @@ def simulate_annual_loss(frequency: Dict[str, Any], impact: Dict[str, Any],
     return np.bincount(trial_index, weights=impacts, minlength=n_trials)
 
 
+def simulate_with_consequences(frequency: Dict[str, Any], severity, n_trials: int,
+                               rng: np.random.Generator):
+    """Like simulate_annual_loss for a consequences.Severity; also returns the annual loss per term key."""
+    counts = sample_frequency(frequency, n_trials, rng)
+    losses, parts = severity.sample(int(counts.sum()), rng)
+    trial_index = np.repeat(np.arange(n_trials), counts)
+    total = np.bincount(trial_index, weights=losses, minlength=n_trials)
+    return total, {k: np.bincount(trial_index, weights=v, minlength=n_trials) for k, v in parts.items()}
+
+
 def loss_statistics(losses: np.ndarray,
                     percentiles: Iterable[float] = DEFAULT_PERCENTILES,
                     tail_level: float = 99) -> Dict[str, float]:
@@ -270,7 +286,11 @@ class SimulationResult:
     """
     def __init__(self, n_trials: int, seed: Optional[int],
                  risk_losses: Dict[str, np.ndarray], risks: Dict[str, Dict[str, Any]],
-                 business_units: Dict[str, Dict[str, Any]]):
+                 business_units: Dict[str, Dict[str, Any]],
+                 term_losses: Optional[Dict[str, np.ndarray]] = None,
+                 term_info: Optional[Dict[str, Dict[str, Any]]] = None):
+        self.term_losses = term_losses or {}   # annual consequence losses per customer/service key
+        self.term_info = term_info or {}
         self.n_trials = n_trials
         self.seed = seed
         self.risk_losses = risk_losses
@@ -335,7 +355,7 @@ class SimulationResult:
         # Diversification: sum of stand-alone P99s vs. P99 of the total
         standalone_p99 = sum(float(np.percentile(l, 99)) for l in self.risk_losses.values())
         total_stats = loss_statistics(total, percentiles)
-        return {
+        report = {
             "n_trials": self.n_trials,
             "seed": self.seed,
             "total": total_stats,
@@ -344,6 +364,35 @@ class SimulationResult:
             "risks": per_risk,
             "business_units": per_unit,
         }
+        if self.term_losses:
+            report["consequences"] = consequence_report(
+                {k: loss_statistics(v, percentiles) for k, v in self.term_losses.items()}, self.term_info)
+        return report
+
+
+def consequence_report(stats_by_key: Dict[str, Dict[str, float]],
+                       info: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Annual consequence losses per customer and per service, largest expected loss first."""
+    out: Dict[str, List[Dict[str, Any]]] = {"customers": [], "services": []}
+    for key, s in stats_by_key.items():
+        i = info[key]
+        out["customers" if i["kind"] == "customer" else "services"].append(
+            {"id": i["id"], "name": i["name"], "risk_count": i["risk_count"], **s})
+    for rows in out.values():
+        rows.sort(key=lambda r: r["mean"], reverse=True)
+    return out
+
+
+def term_index(risks: Dict[str, Dict[str, Any]], residual: bool):
+    """The consequence terms of all risks, grouped by key (customer:<id> / service:<id>)."""
+    from .consequences import Severity
+    severities = {rid: Severity.from_risk(r, residual) for rid, r in risks.items()}
+    info: Dict[str, Dict[str, Any]] = {}
+    for sev in severities.values():
+        for t in sev.terms:
+            entry = info.setdefault(t["key"], {"kind": t["kind"], "id": t["id"], "name": t["name"], "risk_count": 0})
+            entry["risk_count"] += 1
+    return severities, info
 
 
 def _stable_key(text: str) -> int:
@@ -365,7 +414,9 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
     if n_trials <= 0:
         raise ValueError("n_trials must be positive")
     shared_rng = np.random.default_rng(seed)
+    severities, info = term_index(risks, residual)
     losses = {}
+    terms: Dict[str, np.ndarray] = {}
     for risk_id, risk in risks.items():
         freq = (residual and risk.get("residual_frequency")) or risk["frequency"]
         imp = (residual and risk.get("residual_impact")) or risk["impact"]
@@ -374,5 +425,10 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
         # change the random numbers drawn for the others.
         rng = (np.random.default_rng([seed, _stable_key(risk_id)])
                if seed is not None else shared_rng)
-        losses[risk_id] = simulate_annual_loss(freq, imp, n_trials, rng)
-    return SimulationResult(n_trials, seed, losses, risks, business_units)
+        if severities[risk_id].has_consequences:
+            losses[risk_id], parts = simulate_with_consequences(freq, severities[risk_id], n_trials, rng)
+            for key, v in parts.items():
+                terms[key] = terms.get(key, 0) + v
+        else:  # unchanged path, so risks without consequences keep exactly the same random numbers
+            losses[risk_id] = simulate_annual_loss(freq, imp, n_trials, rng)
+    return SimulationResult(n_trials, seed, losses, risks, business_units, terms, info)

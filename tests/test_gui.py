@@ -131,3 +131,18 @@ def test_third_party_page_shows_concentration(window):
     assert ServiceDialog(window.svc, s).values()["supplier_ids"] == s.supplier_ids
     sup = window.svc.list_suppliers()[0]
     assert SupplierDialog(window.svc, sup).values()["subcontractor_ids"] == sup.subcontractor_ids
+
+
+def test_stress_test_and_outage_fields(window):
+    page = window.pages[window.PAGES.index("Third parties")]
+    page.refresh()
+    page.table.selectRow(0)
+    page.run_stress()
+    assert "down for 24 hours" in page.exposure.toPlainText()
+    from riskmesh.gui.dialogs import RiskDialog
+    risk = next(r for r in window.svc.list_risks() if r.outage_hours)
+    values = RiskDialog(window.svc, risk).values()
+    assert values["outage_hours"] == risk.outage_hours and values["supplier_ids"] == risk.supplier_ids
+    assert values["residual_outage_hours"] == risk.residual_outage_hours
+    plain = next(r for r in window.svc.list_risks() if not r.outage_hours)
+    assert RiskDialog(window.svc, plain).values()["outage_hours"] is None
