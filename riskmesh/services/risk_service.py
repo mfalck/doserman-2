@@ -27,6 +27,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .reporting import REPORTING_WRITE_METHODS, Reporting
+from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin, AnchorAdmin, Reporting):
+class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -370,6 +371,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting):
         elif isinstance(e, Risk):
             self._name(e, "Risk")
             e.asset_ids = list(dict.fromkeys(e.asset_ids or []))
+            e.service_ids = list(dict.fromkeys(e.service_ids or []))
+            e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
             try:
                 risk_model.validate_frequency(e.frequency)
                 risk_model.build_impact_distribution(e.impact)
@@ -396,6 +399,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting):
             self._enum(e.event_type, CONTROL_EVENT_TYPES, "event_type")
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
+        else:
+            self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
 
@@ -536,7 +541,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting):
 
     def create_risk(self, unit_id: str, name: str, frequency: Dict[str, Any], impact: Dict[str, Any],
                     **optional: Any) -> Risk:
-        """Optional: description, category, asset_ids, owner_id, residual_frequency, residual_impact."""
+        """Optional: description, category, asset_ids, owner_id, residual_frequency, residual_impact,
+        service_ids, supplier_ids."""
         return self._create(Risk, name=name, business_unit_id=unit_id, frequency=frequency, impact=impact,
                             **optional)
 
@@ -1065,7 +1071,7 @@ WRITE_METHODS = (
     "create_control", "update_control", "delete_control", "create_risk_event", "update_risk_event",
     "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
     "import_data", "label_run", "reset_all", "_store_run",
-) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS
+) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
 
 
 def _write(method):

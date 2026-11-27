@@ -6,13 +6,13 @@ from typing import Any, Callable, Dict, Optional
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QLogValueAxis, QValueAxis
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from ..services import RiskService
-from .dialogs import ControlDialog, RiskDialog, UnitDialog
+from .dialogs import ControlDialog, CustomerDialog, RiskDialog, ServiceDialog, SupplierDialog, UnitDialog
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
 
@@ -656,6 +656,184 @@ class ReportsPage(Page):
                 self.changed()
 
 
+
+# ---------------------------------------------------------------------------
+
+SEVERITY_COLORS = {"high": "#fecaca", "medium": "#fef08a", "low": "#e5e7eb"}
+
+
+class ThirdPartyPage(Page):
+    """Suppliers, the services we deliver and our customers; concentration and review findings."""
+
+    TABS = ("Suppliers", "Services", "Customers")
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Third parties"))
+        self.cards = {k: Card(k) for k in ("Suppliers", "Customers", "Contract value", "Regulated customers",
+                                           "Open findings")}
+        row = QHBoxLayout()
+        for c in self.cards.values():
+            row.addWidget(c)
+        self.layout_.addLayout(row)
+
+        bar = QHBoxLayout()
+        self.kind = QComboBox()
+        self.kind.addItems(self.TABS)
+        self.kind.currentIndexChanged.connect(self.refresh)
+        bar.addWidget(self.kind)
+        bar.addStretch()
+        for text, slot in (("New", self.add), ("Edit", self.edit), ("Delete", self.delete)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        self.layout_.addLayout(bar)
+
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Name"])
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.table.itemSelectionChanged.connect(self.show_exposure)
+        split.addWidget(self.table)
+        bottom = QWidget()
+        bl = QHBoxLayout(bottom)
+        self.exposure = QPlainTextEdit()
+        self.exposure.setReadOnly(True)
+        self.exposure.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.exposure.setPlaceholderText("Select a row to see what depends on it")
+        bl.addWidget(self.exposure, 2)
+        self.findings = Table(["Finding", "Name", "Type", "Severity"])
+        bl.addWidget(self.findings, 3)
+        split.addWidget(bottom)
+        self.layout_.addWidget(split, 1)
+
+    def _tab(self) -> str:
+        return self.kind.currentText()
+
+    def refresh(self) -> None:
+        o = self.svc.third_party_overview()
+        t = o["totals"]
+        high = sum(1 for f in o["findings"] if f["severity"] == "high")
+        self.cards["Suppliers"].set(str(t["suppliers"]), f"{t['services']} services")
+        self.cards["Customers"].set(str(t["customers"]), f"{t['critical_function_customers']} critical function")
+        self.cards["Contract value"].set(compact(t["contract_value"]), "per year")
+        self.cards["Regulated customers"].set(str(t["regulated_customers"]), "NIS2, DORA, CER ...")
+        self.cards["Open findings"].set(str(len(o["findings"])), f"{high} high")
+        tab = self._tab()
+        regs = lambda d: ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in d.items())  # noqa: E731
+        if tab == "Suppliers":
+            by_id = {x.id: x for x in self.svc.list_suppliers()}
+            headers = ["Supplier", "Tier", "Country", "Services", "Customers", "Contract value", "Regulation",
+                       "Next review", "Exit plan"]
+            rows = [[x["name"], title(x["tier"]), x["country"] or "", x["service_count"], x["customer_count"],
+                     money(x["contract_value"]), regs(x["by_regulation"]), by_id[x["id"]].next_review or "",
+                     "yes" if by_id[x["id"]].exit_plan else "no"] for x in o["suppliers"]]
+            keys, numeric = [x["id"] for x in o["suppliers"]], [3, 4, 5]
+        elif tab == "Services":
+            headers = ["Service", "Criticality", "Suppliers (incl. 4th parties)", "Customers", "Contract value",
+                       "Regulation", "Notify within"]
+            rows = [[x["name"], title(x["criticality"]), x["supplier_count"], x["customer_count"],
+                     money(x["contract_value"]), regs(x["by_regulation"]),
+                     "" if x["shortest_notification_hours"] is None else f"{x['shortest_notification_hours']:g} h"]
+                    for x in o["services"]]
+            keys, numeric = [x["id"] for x in o["services"]], [2, 3, 4]
+        else:
+            customers = self.svc.list_customers()
+            headers = ["Customer", "Sector", "Regulation", "Critical function", "Services", "Contract value",
+                       "Notify within", "Audit rights", "Exit support"]
+            rows = [[c.name, c.sector or "", ", ".join(r.replace("_", " ") for r in c.regulations),
+                     "yes" if c.critical_function else "", len(c.service_ids), money(c.contract_value),
+                     "" if c.notification_hours is None else f"{c.notification_hours:g} h",
+                     "yes" if c.audit_rights else "no", "yes" if c.exit_support else "no"] for c in customers]
+            keys, numeric = [c.id for c in customers], [4, 5]
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.numeric = set(numeric)
+        self.table.fill(rows, keys=keys)
+        self.findings.fill([[f["finding"], f["name"], f["entity_type"], f["severity"]] for f in o["findings"]],
+                           colors={(i, 3): SEVERITY_COLORS[f["severity"]] for i, f in enumerate(o["findings"])})
+        self.exposure.clear()
+
+    def show_exposure(self) -> None:
+        key = self.table.selected_key()
+        if not key:
+            return
+        tab = self._tab()
+        lines = []
+        if tab == "Customers":
+            p = self.svc.customer_profile(key)
+            lines.append(f"{p['customer']['name']} depends on:")
+            lines += [f"  service   {s['name']} ({title(s['criticality'])})" for s in p["services"]]
+            lines += [f"  supplier  {s['name']} ({'direct' if s['depth'] == 1 else 'fourth party'}, "
+                      f"{s['country'] or '?'})" for s in p["suppliers"]]
+            lines += [f"  risk      {r['name']} ({r['level']}, {money(r['expected_annual_loss']).strip()}/yr)"
+                      for r in p["risks"]]
+            lines += [f"  control   {c['name']} ({title(c['implementation_status'])})" for c in p["controls"]]
+        else:
+            e = self.svc.supplier_exposure(key) if tab == "Suppliers" else self.svc.service_exposure(key)
+            name = (e.get("supplier") or e.get("service"))["name"]
+            lines.append(f"If {name} fails: {e['customer_count']} customers, contract value "
+                         f"{money(e['contract_value']).strip()}, {e['critical_function_customers']} with a "
+                         "critical function")
+            if e["shortest_notification_hours"] is not None:
+                lines.append(f"Shortest notification deadline: {e['shortest_notification_hours']:g} hours")
+            lines += [f"  via       {v['name']}" for v in e.get("via_suppliers", [])]
+            lines += [f"  service   {s['name']} ({title(s['criticality'])})" for s in e.get("services", [])]
+            lines += [f"  needs     {s['name']} ({'direct' if s['depth'] == 1 else 'level ' + str(s['depth'])})"
+                      for s in e.get("suppliers", [])]
+            lines += [f"  customer  {c['name']}  {', '.join(c['regulations'])}" for c in e["customers"]]
+            lines += [f"  risk      {r['name']} ({r['level']})" for r in e["risks"]]
+        self.exposure.setPlainText("\n".join(lines))
+
+    def _dialog(self, entity=None):
+        tab = self._tab()
+        cls = {"Suppliers": SupplierDialog, "Services": ServiceDialog, "Customers": CustomerDialog}[tab]
+        return cls(self.svc, entity, parent=self)
+
+    def add(self):
+        dialog = self._dialog()
+        if dialog.exec():
+            v = dialog.values()
+            tab = self._tab()
+            if tab == "Suppliers":
+                fn = lambda: self.svc.create_supplier(v.pop("name"), **v)  # noqa: E731
+            elif tab == "Services":
+                fn = lambda: self.svc.create_service(v.pop("business_unit_id"), v.pop("name"), **v)  # noqa: E731
+            else:
+                fn = lambda: self.svc.create_customer(v.pop("name"), **v)  # noqa: E731
+            if guarded(self, fn):
+                self.changed()
+
+    def _ops(self):
+        return {"Suppliers": (self.svc.get_supplier, self.svc.update_supplier, self.svc.delete_supplier),
+                "Services": (self.svc.get_service, self.svc.update_service, self.svc.delete_service),
+                "Customers": (self.svc.get_customer, self.svc.update_customer, self.svc.delete_customer)}[self._tab()]
+
+    def edit(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        get, update, _ = self._ops()
+        dialog = self._dialog(get(key))
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: update(key, **dialog.values())):
+                    self.changed()
+
+    def delete(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        get, _, remove = self._ops()
+        entity = get(key)
+        reason, ok = QInputDialog.getText(self, "Delete", f"Delete '{entity.name}'? Links to it are removed."
+                                          "\n\nReason (recorded in the audit log):")
+        if ok:
+            with self.svc.context(reason=reason or None):
+                if guarded(self, lambda: remove(key)) is not None:
+                    self.changed()
+
+
 def _editor_only(method):
     """Viewers can open pages but not change anything (double-clicks included)."""
     @functools.wraps(method)
@@ -669,6 +847,6 @@ def _editor_only(method):
 
 for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (RisksPage, ("add", "edit", "delete")), (ControlsPage, ("add", "edit", "delete")),
-                     (AnalysisPage, ("name_run",))):
+                     (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete"))):
     for _name in _names:
         setattr(_cls, _name, _editor_only(getattr(_cls, _name)))

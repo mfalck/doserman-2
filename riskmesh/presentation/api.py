@@ -275,6 +275,9 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         """Allowed values and scoring thresholds, for building forms."""
         return {
             "organization_types": m.ORGANIZATION_TYPES,
+            "supplier_tiers": m.SUPPLIER_TIERS,
+            "service_criticalities": m.SERVICE_CRITICALITIES,
+            "regulations": m.REGULATIONS,
             "control_types": m.CONTROL_TYPES,
             "implementation_statuses": m.IMPLEMENTATION_STATUSES,
             "risk_event_types": m.RISK_EVENT_TYPES,
@@ -379,6 +382,90 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.delete("/persons/{person_id}", status_code=204, tags=["persons"])
     async def delete_person(person_id: str):
         svc.delete_person(person_id)
+
+    # -- third parties --------------------------------------------------------
+
+    @api.get("/third-parties/overview", tags=["third parties"])
+    async def third_party_overview():
+        """Concentration (who depends on which supplier and service) and review findings."""
+        return svc.third_party_overview()
+
+    @api.get("/suppliers", response_model=List[s.SupplierOut], tags=["third parties"])
+    async def list_suppliers(tier: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_suppliers(tier)]
+
+    @api.post("/suppliers", response_model=s.SupplierOut, status_code=201, tags=["third parties"])
+    async def create_supplier(body: s.SupplierCreate):
+        d = body.model_dump()
+        return svc.create_supplier(d.pop("name"), **d).to_dict()
+
+    @api.get("/suppliers/{supplier_id}", response_model=s.SupplierOut, tags=["third parties"])
+    async def get_supplier(supplier_id: str):
+        return svc.get_supplier(supplier_id).to_dict()
+
+    @api.get("/suppliers/{supplier_id}/exposure", tags=["third parties"])
+    async def supplier_exposure(supplier_id: str):
+        """Services and customers hit if the supplier fails (also via suppliers that subcontract to it)."""
+        return svc.supplier_exposure(supplier_id)
+
+    @api.patch("/suppliers/{supplier_id}", response_model=s.SupplierOut, tags=["third parties"])
+    async def update_supplier(supplier_id: str, body: s.SupplierUpdate):
+        return svc.update_supplier(supplier_id, **_changes(body)).to_dict()
+
+    @api.delete("/suppliers/{supplier_id}", status_code=204, tags=["third parties"])
+    async def delete_supplier(supplier_id: str):
+        svc.delete_supplier(supplier_id)
+
+    @api.get("/services", response_model=List[s.ServiceOut], tags=["third parties"])
+    async def list_services(business_unit_id: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_services(business_unit_id)]
+
+    @api.post("/services", response_model=s.ServiceOut, status_code=201, tags=["third parties"])
+    async def create_service(body: s.ServiceCreate):
+        d = body.model_dump()
+        return svc.create_service(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
+
+    @api.get("/services/{service_id}", response_model=s.ServiceOut, tags=["third parties"])
+    async def get_service(service_id: str):
+        return svc.get_service(service_id).to_dict()
+
+    @api.get("/services/{service_id}/exposure", tags=["third parties"])
+    async def service_exposure(service_id: str):
+        return svc.service_exposure(service_id)
+
+    @api.patch("/services/{service_id}", response_model=s.ServiceOut, tags=["third parties"])
+    async def update_service(service_id: str, body: s.ServiceUpdate):
+        return svc.update_service(service_id, **_changes(body)).to_dict()
+
+    @api.delete("/services/{service_id}", status_code=204, tags=["third parties"])
+    async def delete_service(service_id: str):
+        svc.delete_service(service_id)
+
+    @api.get("/customers", response_model=List[s.CustomerOut], tags=["third parties"])
+    async def list_customers(regulation: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_customers(regulation)]
+
+    @api.post("/customers", response_model=s.CustomerOut, status_code=201, tags=["third parties"])
+    async def create_customer(body: s.CustomerCreate):
+        d = body.model_dump()
+        return svc.create_customer(d.pop("name"), **d).to_dict()
+
+    @api.get("/customers/{customer_id}", response_model=s.CustomerOut, tags=["third parties"])
+    async def get_customer(customer_id: str):
+        return svc.get_customer(customer_id).to_dict()
+
+    @api.get("/customers/{customer_id}/profile", tags=["third parties"])
+    async def customer_profile(customer_id: str):
+        """What the customer depends on: services, suppliers incl. fourth parties, risks, controls, findings."""
+        return svc.customer_profile(customer_id)
+
+    @api.patch("/customers/{customer_id}", response_model=s.CustomerOut, tags=["third parties"])
+    async def update_customer(customer_id: str, body: s.CustomerUpdate):
+        return svc.update_customer(customer_id, **_changes(body)).to_dict()
+
+    @api.delete("/customers/{customer_id}", status_code=204, tags=["third parties"])
+    async def delete_customer(customer_id: str):
+        svc.delete_customer(customer_id)
 
     # -- risks --------------------------------------------------------------
 

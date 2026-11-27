@@ -30,24 +30,56 @@ def seed_demo(svc: RiskService) -> None:
     svc.add_delegate(it.id, david.id)
     svc.add_delegate(hr.id, mike.id)
 
+    # Third parties: our suppliers (with a fourth party), the services we deliver and our customers
+    datacenter = svc.create_supplier("Hyperscale DC GmbH", tier="IMPORTANT", country="DE",
+                                     description="Data centre used by our hosting provider",
+                                     data_locations=["DE"], certifications=["ISO 27001"])
+    hosting = svc.create_supplier("Nordic Cloud A/S", tier="CRITICAL", country="DK", owner_id=jane.id,
+                                  description="Hosting of production systems", contract_start="2024-01-01",
+                                  contract_end="2027-12-31", next_review="2026-06-30",
+                                  processes_personal_data=True, data_locations=["DK", "DE"],
+                                  certifications=["ISO 27001", "ISAE 3402 type 2"],
+                                  subcontractor_ids=[datacenter.id])
+    mail = svc.create_supplier("SecureMail ApS", tier="IMPORTANT", country="DK", owner_id=jane.id,
+                               description="E-mail and notification service", next_review="2027-03-01",
+                               processes_personal_data=True, data_locations=["EU"], exit_plan=True,
+                               certifications=["ISO 27001"])
+    portal = svc.create_service(dev.id, "Citizen self-service portal", criticality="CRITICAL",
+                                owner_id=david.id, asset_ids=[webapp.id, db.id],
+                                supplier_ids=[hosting.id, mail.id], rto_hours=4, rpo_hours=1,
+                                description="SaaS portal our customers offer to their citizens")
+    metering = svc.create_service(it.id, "Meter data hub", criticality="HIGH", owner_id=jane.id,
+                                  asset_ids=[db.id], supplier_ids=[hosting.id], rto_hours=8, rpo_hours=0.25)
+    payroll = svc.create_service(finance.id, "Payroll processing", criticality="MEDIUM", owner_id=john.id)
+    svc.create_customer("North Municipality", sector="municipal", regulations=["NIS2_IMPORTANT", "GDPR"],
+                        service_ids=[portal.id, payroll.id], contract_value=1_800_000, notification_hours=24,
+                        audit_rights=True, account_owner_id=robert.id, contract_end="2028-06-30")
+    svc.create_customer("South Energy Grid", sector="energy", regulations=["NIS2_ESSENTIAL", "CER"],
+                        service_ids=[metering.id], contract_value=3_200_000, notification_hours=12,
+                        audit_rights=True, exit_support=True, account_owner_id=robert.id)
+    svc.create_customer("East Savings Bank", sector="finance", regulations=["DORA", "GDPR"],
+                        service_ids=[portal.id], contract_value=2_400_000, critical_function=True,
+                        notification_hours=4, audit_rights=True, account_owner_id=robert.id)
+
     ransomware = svc.create_risk(
         it.id, "Ransomware attack",
         frequency={"type": "poisson", "rate": 0.15},
         impact={"dist": "lognorm_p10_p90", "p10": 200_000, "p90": 5_000_000},
         category="cyber", asset_ids=[db.id], owner_id=jane.id,
-        residual_frequency={"type": "poisson", "rate": 0.05},
+        residual_frequency={"type": "poisson", "rate": 0.05}, service_ids=[portal.id, metering.id],
     )
     svc.create_risk(
         it.id, "Database outage",
         frequency={"type": "poisson", "rate": 2.0},
         impact={"dist": "pert", "min": 5_000, "mode": 25_000, "max": 250_000},
         category="operational", asset_ids=[db.id], owner_id=jane.id,
+        service_ids=[portal.id, metering.id], supplier_ids=[hosting.id],
     )
     breach = svc.create_risk(
         dev.id, "Web app data breach",
         frequency={"type": "bernoulli", "p": 0.08},
         impact={"dist": "lognorm_p10_p90", "p10": 100_000, "p90": 3_000_000},
-        category="cyber", asset_ids=[webapp.id], owner_id=david.id,
+        category="cyber", asset_ids=[webapp.id], owner_id=david.id, service_ids=[portal.id],
         residual_impact={"dist": "lognorm_p10_p90", "p10": 50_000, "p90": 1_500_000},
     )
     fraud = svc.create_risk(

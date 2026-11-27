@@ -124,6 +124,8 @@ class RiskCreate(_In):
     owner_id: Optional[str] = None
     residual_frequency: Optional[Spec] = None
     residual_impact: Optional[Spec] = None
+    service_ids: List[str] = []
+    supplier_ids: List[str] = []
 
 
 class RiskUpdate(_In):
@@ -137,6 +139,8 @@ class RiskUpdate(_In):
     owner_id: Optional[str] = None
     residual_frequency: Optional[Spec] = None
     residual_impact: Optional[Spec] = None
+    service_ids: Optional[List[str]] = None
+    supplier_ids: Optional[List[str]] = None
 
 
 class ScoreOut(BaseModel):
@@ -165,6 +169,8 @@ class RiskOut(_Out):
     owner_id: Optional[str] = None
     residual_frequency: Optional[Spec] = None
     residual_impact: Optional[Spec] = None
+    service_ids: List[str] = []
+    supplier_ids: List[str] = []
     scores: RiskScoresOut
     control_ids: List[str] = []
 
@@ -202,6 +208,145 @@ class ControlOut(_Out):
     effectiveness_rating: Optional[int] = None
     owner_id: Optional[str] = None
     risk_ids: List[str] = []
+
+
+# -- Third parties: suppliers, services, customers --------------------------------
+
+Tier = Literal["CRITICAL", "IMPORTANT", "STANDARD"]
+Criticality = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+Regulation = Literal["NIS2_ESSENTIAL", "NIS2_IMPORTANT", "DORA", "CER", "GDPR", "OTHER"]
+
+
+class SupplierCreate(_In):
+    name: str
+    tier: Tier = "STANDARD"
+    description: Optional[str] = None
+    country: Optional[str] = None
+    owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    next_review: Optional[str] = None
+    processes_personal_data: bool = False
+    data_locations: List[str] = []
+    certifications: List[str] = []
+    exit_plan: bool = False
+    subcontractor_ids: List[str] = []
+
+
+class SupplierUpdate(_In):
+    name: Optional[str] = None
+    tier: Optional[Tier] = None
+    description: Optional[str] = None
+    country: Optional[str] = None
+    owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    next_review: Optional[str] = None
+    processes_personal_data: Optional[bool] = None
+    data_locations: Optional[List[str]] = None
+    certifications: Optional[List[str]] = None
+    exit_plan: Optional[bool] = None
+    subcontractor_ids: Optional[List[str]] = None
+
+
+class SupplierOut(_Out):
+    name: str
+    tier: str
+    description: Optional[str] = None
+    country: Optional[str] = None
+    owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    next_review: Optional[str] = None
+    processes_personal_data: bool = False
+    data_locations: List[str] = []
+    certifications: List[str] = []
+    exit_plan: bool = False
+    subcontractor_ids: List[str] = []
+
+
+class ServiceCreate(_In):
+    name: str
+    business_unit_id: str
+    description: Optional[str] = None
+    criticality: Criticality = "MEDIUM"
+    owner_id: Optional[str] = None
+    asset_ids: List[str] = []
+    supplier_ids: List[str] = []
+    rto_hours: Optional[float] = Field(None, ge=0)
+    rpo_hours: Optional[float] = Field(None, ge=0)
+
+
+class ServiceUpdate(_In):
+    name: Optional[str] = None
+    business_unit_id: Optional[str] = None
+    description: Optional[str] = None
+    criticality: Optional[Criticality] = None
+    owner_id: Optional[str] = None
+    asset_ids: Optional[List[str]] = None
+    supplier_ids: Optional[List[str]] = None
+    rto_hours: Optional[float] = Field(None, ge=0)
+    rpo_hours: Optional[float] = Field(None, ge=0)
+
+
+class ServiceOut(_Out):
+    name: str
+    business_unit_id: str
+    description: Optional[str] = None
+    criticality: str
+    owner_id: Optional[str] = None
+    asset_ids: List[str] = []
+    supplier_ids: List[str] = []
+    rto_hours: Optional[float] = None
+    rpo_hours: Optional[float] = None
+
+
+class CustomerCreate(_In):
+    name: str
+    sector: Optional[str] = None
+    regulations: List[Regulation] = []
+    service_ids: List[str] = []
+    critical_function: bool = False
+    account_owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    contract_value: Optional[float] = Field(None, ge=0)
+    notification_hours: Optional[float] = Field(None, ge=0)
+    audit_rights: bool = False
+    exit_support: bool = False
+    notes: Optional[str] = None
+
+
+class CustomerUpdate(_In):
+    name: Optional[str] = None
+    sector: Optional[str] = None
+    regulations: Optional[List[Regulation]] = None
+    service_ids: Optional[List[str]] = None
+    critical_function: Optional[bool] = None
+    account_owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    contract_value: Optional[float] = Field(None, ge=0)
+    notification_hours: Optional[float] = Field(None, ge=0)
+    audit_rights: Optional[bool] = None
+    exit_support: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class CustomerOut(_Out):
+    name: str
+    sector: Optional[str] = None
+    regulations: List[str] = []
+    service_ids: List[str] = []
+    critical_function: bool = False
+    account_owner_id: Optional[str] = None
+    contract_start: Optional[str] = None
+    contract_end: Optional[str] = None
+    contract_value: Optional[float] = None
+    notification_hours: Optional[float] = None
+    audit_rights: bool = False
+    exit_support: bool = False
+    notes: Optional[str] = None
 
 
 # -- Events -----------------------------------------------------------------
