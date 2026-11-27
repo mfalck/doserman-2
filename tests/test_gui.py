@@ -214,3 +214,32 @@ def test_incident_dialog_round_trip(window):
     v = IncidentDialog(svc, inc).values()
     assert v["detected_at"].replace(" ", "T") == inc.detected_at and v["nis2_significant"] == inc.nis2_significant
     assert v["supplier_ids"] == inc.supplier_ids
+
+
+def test_evidence_page_calibrates_and_applies(window, monkeypatch):
+    page = window.pages[window.PAGES.index("Data")]
+    window.nav.setCurrentRow(window.PAGES.index("Data"))
+    names = [page.table.item(r, 0).text() for r in range(page.table.rowCount())]
+    assert "Database outage" in names
+    page.table.selectRow(names.index("Database outage"))
+    assert "hosting outage" in page.detail.toPlainText()
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *a, **k: QtWidgets.QMessageBox.Yes)
+    page.apply()
+    risk = next(r for r in window.svc.list_risks() if r.name == "Database outage")
+    assert risk.frequency["rate"] > 2.0
+    page.kind.setCurrentText("Observations")
+    assert page.table.rowCount() == 9
+    page.kind.setCurrentText("Benchmarks")
+    assert page.table.rowCount() == 2
+
+
+def test_observation_and_benchmark_dialogs_round_trip(window):
+    from riskmesh.gui.dialogs import BenchmarkDialog, ObservationDialog
+    svc = window.svc
+    o = next(x for x in svc.list_observations() if x.supplier_id)
+    v = ObservationDialog(svc, o).values()
+    assert (v["supplier_id"], v["business_unit_id"], v["count"], v["category"]) == (o.supplier_id, None, o.count, o.category)
+    b = svc.list_benchmarks()[0]
+    v = BenchmarkDialog(svc, b).values()
+    assert (v["events_per_year"], v["loss_p10"], v["weight"], v["year"]) == (b.events_per_year, b.loss_p10, b.weight, b.year)
+    assert BenchmarkDialog(svc).values()["year"] is None

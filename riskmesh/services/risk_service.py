@@ -27,6 +27,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .dora import DoraExtract
+from .evidence import EVIDENCE_WRITE_METHODS, Evidence
 from .excel import ExcelExchange
 from .incidents import INCIDENT_WRITE_METHODS, Incidents
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
@@ -60,7 +61,8 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, ExcelExchange):
+class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
+                  ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -378,6 +380,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             e.asset_ids = list(dict.fromkeys(e.asset_ids or []))
             e.service_ids = list(dict.fromkeys(e.service_ids or []))
             e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
+            e.evidence_categories = list(dict.fromkeys(str(c).strip() for c in e.evidence_categories or []
+                                                       if str(c).strip()))
             try:
                 risk_model.validate_frequency(e.frequency)
                 risk_model.build_impact_distribution(e.impact)
@@ -411,7 +415,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             self._enum(e.event_type, CONTROL_EVENT_TYPES, "event_type")
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
-        elif not self._validate_portfolio(e) and not self._validate_incident(e):
+        elif not (self._validate_portfolio(e) or self._validate_incident(e) or self._validate_evidence(e)):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -477,6 +481,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             raise ConflictError("Business unit has child units; delete with cascade=True.")
         for uid in reversed(units):  # children first
             self._delete_unit_appetites(uid)
+            self._delete_observations_at("business_unit_id", uid)
             self._delete(BusinessUnit, uid)
         return units
 
@@ -1110,7 +1115,8 @@ WRITE_METHODS = (
     "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
     "import_data", "label_run", "reset_all", "_store_run",
 ) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
-     + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS)
+     + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS
+     + EVIDENCE_WRITE_METHODS)
 
 
 def _write(method):

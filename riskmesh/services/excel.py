@@ -27,7 +27,7 @@ from ..domain.errors import ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             ControlEvent, Correlation, Incident, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             Benchmark, ControlEvent, Correlation, Incident, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -130,6 +130,7 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Assets", "asset_ids", "refs", ref=Asset, width=22),
         Col("Services", "service_ids", "refs", ref=Service, width=26),
         Col("Suppliers", "supplier_ids", "refs", ref=Supplier, width=22),
+        Col("Evidence categories", "evidence_categories", "list", width=24),
         Col("Description", "description", width=40)]),
     ("Correlations", Correlation, [
         Col("Risk A", "risk_a_id", "ref", required=True, ref=Risk, width=28),
@@ -171,6 +172,20 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Financial impact", "financial_impact", "number", width=14),
         Col("Root cause", "root_cause", width=30), Col("Description", "description", width=40),
         Col("Notifications sent (JSON)", "notifications", "json", width=30)]),
+    ("Observations", Observation, [
+        Col("Date", "date", "date", required=True, width=12),
+        Col("Category", "category", required=True, width=20),
+        Col("Count", "count", "int", width=8), Col("Loss", "loss", "number", width=14),
+        Col("Organisation", "business_unit_id", "ref", ref=BusinessUnit, width=22),
+        Col("Supplier", "supplier_id", "ref", ref=Supplier, width=22),
+        Col("Risk", "risk_id", "ref", ref=Risk, width=24),
+        Col("Source", "source", width=20), Col("Description", "description", width=40)]),
+    ("Benchmarks", Benchmark, [
+        Col("Name", "name", required=True, width=32), Col("Category", "category", required=True, width=20),
+        Col("Events per year", "events_per_year", "number", width=12),
+        Col("Loss low P10", "loss_p10", "number", width=14), Col("Loss high P90", "loss_p90", "number", width=14),
+        Col("Weight", "weight", "number", width=9), Col("Year", "year", "int", width=8),
+        Col("Source", "source", width=36), Col("Notes", "notes", width=40)]),
     ("Control tests", ControlEvent, [
         Col("Control", "control_id", "ref", required=True, ref=Control, width=28),
         Col("Date", "date", "date", required=True, width=12),
@@ -196,6 +211,11 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Observations: events that happened, one row per event or a count (Count) with their total Loss.",
+    "    Fill Organisation or Supplier for that level; leave both empty for the whole group.",
+    "    They count for risks whose Evidence categories (or category) include the observation's Category.",
+    "- Benchmarks: public figures for organisations like ours (events per year, loss range per event).",
+    "    Weight: how much it counts - in years of our own data (frequency) and in events (loss).",
     "- Correlations: how strongly two risks tend to have bad years together, -1 to 1 (0.3 weak, 0.6 strong).",
     "- Appetite tolerance: points 'loss @ chance', e.g. '1000000 @ 10%; 10000000 @ 1%' = at most 10% chance",
     "    per year of losing more than 1,000,000 and at most 1% of more than 10,000,000. No organisation = all.",
@@ -579,11 +599,16 @@ class ExcelExchange:
         elif c.kind == "bool":
             d[c.field] = _bool(raw)
         elif c.kind == "number":
-            d[c.field] = _number(raw)
+            v = _number(raw)
+            if v is None and c.field in ("weight",):
+                return  # empty: the stored value or the default (1)
+            d[c.field] = v
         elif c.kind == "int":
             v = _number(raw)
             if v is not None and not float(v).is_integer():
                 raise ValueError("expected a whole number")
+            if v is None and c.field in ("count",):
+                return  # empty: the stored value or the default (1)
             d[c.field] = int(v) if v is not None else None
         elif c.kind == "date":
             d[c.field] = _date(raw)

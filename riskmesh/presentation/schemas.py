@@ -135,6 +135,7 @@ class RiskCreate(_In):
     outage_hours: Optional[Spec] = Field(None, examples=[{"dist": "lognorm_p10_p90", "p10": 1, "p90": 24}],
                                          description="duration of one event's outage, in hours")
     residual_outage_hours: Optional[Spec] = None
+    evidence_categories: List[str] = []
 
 
 class RiskUpdate(_In):
@@ -152,6 +153,7 @@ class RiskUpdate(_In):
     supplier_ids: Optional[List[str]] = None
     outage_hours: Optional[Spec] = None
     residual_outage_hours: Optional[Spec] = None
+    evidence_categories: Optional[List[str]] = None
 
 
 class ScoreOut(BaseModel):
@@ -186,6 +188,7 @@ class RiskOut(_Out):
     residual_outage_hours: Optional[Spec] = None
     scores: RiskScoresOut
     control_ids: List[str] = []
+    evidence_categories: List[str] = []
 
 
 # -- Controls ---------------------------------------------------------------
@@ -341,6 +344,85 @@ class IncidentOut(_Out):
 class NotificationSent(_In):
     key: str = Field(..., description="e.g. nis2:early_warning or customer:<id>")
     sent_at: Optional[str] = Field(None, description="default now; empty string undoes it")
+
+
+class ObservationCreate(_In):
+    date: str
+    category: str
+    count: int = Field(1, ge=0)
+    loss: Optional[float] = Field(None, ge=0)
+    business_unit_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    risk_id: Optional[str] = None
+    description: Optional[str] = None
+    source: Optional[str] = None
+
+
+class ObservationUpdate(_In):
+    date: Optional[str] = None
+    category: Optional[str] = None
+    count: Optional[int] = Field(None, ge=0)
+    loss: Optional[float] = Field(None, ge=0)
+    business_unit_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    risk_id: Optional[str] = None
+    description: Optional[str] = None
+    source: Optional[str] = None
+
+
+class ObservationOut(_Out):
+    date: str
+    category: str
+    count: int = 1
+    loss: Optional[float] = None
+    business_unit_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    risk_id: Optional[str] = None
+    description: Optional[str] = None
+    source: Optional[str] = None
+
+
+class BenchmarkCreate(_In):
+    name: str
+    category: str
+    source: Optional[str] = None
+    year: Optional[int] = None
+    events_per_year: Optional[float] = Field(None, ge=0)
+    loss_p10: Optional[float] = Field(None, gt=0)
+    loss_p90: Optional[float] = Field(None, gt=0)
+    weight: float = Field(1.0, gt=0)
+    notes: Optional[str] = None
+
+
+class BenchmarkUpdate(_In):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    source: Optional[str] = None
+    year: Optional[int] = None
+    events_per_year: Optional[float] = Field(None, ge=0)
+    loss_p10: Optional[float] = Field(None, gt=0)
+    loss_p90: Optional[float] = Field(None, gt=0)
+    weight: Optional[float] = Field(None, gt=0)
+    notes: Optional[str] = None
+
+
+class BenchmarkOut(_Out):
+    name: str
+    category: str
+    source: Optional[str] = None
+    year: Optional[int] = None
+    events_per_year: Optional[float] = None
+    loss_p10: Optional[float] = None
+    loss_p90: Optional[float] = None
+    weight: float = 1.0
+    notes: Optional[str] = None
+
+
+class CalibrationApply(_In):
+    frequency: bool = True
+    impact: bool = True
+    expert_years: float = Field(2.0, gt=0)
+    expert_events: float = Field(5.0, gt=0)
 
 
 class CorrelationCreate(_In):

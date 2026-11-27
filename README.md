@@ -272,6 +272,58 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Data and calibration: observed events and public benchmarks
+
+Estimates are where a risk analysis starts; data is how it stays honest.
+
+**Observations** are events that actually happened: a date, a category
+(`"data breach"`, `"hosting outage"` ...), a count and their total loss, and
+a level that follows from what the row names:
+
+| Row names | Level | Counts for risks ... |
+|---|---|---|
+| a supplier | supplier | that name the supplier, or a supplier that subcontracts to it |
+| a business unit | unit | of that unit or a unit above it |
+| neither | group | of a top-level unit |
+
+An observation counts for a risk when its category is one of the risk's
+`evidence_categories` (or the risk's own category), or when it names the risk.
+The period the data covers starts with the first entry of each source (an
+incident log kept since January 2025 also says when nothing happened).
+
+**Benchmarks** are public figures for organisations like ours, e.g. from a
+national statistics office, the data protection authority or an industry
+report: events per year and/or a loss range per event, with a source, a year
+and a `weight` (how much it counts: years of our own data for the frequency,
+events for the loss). RiskMesh does not fetch them: you choose the sources
+and how far to trust them. The demo's benchmarks are illustrative, not real
+figures.
+
+**Calibration** weighs the three (see `riskmesh/domain/calibration.py`):
+
+- frequency, Poisson-Gamma: the estimate is worth `expert_years` years of
+  data (default 2), each benchmark its weight, and our data n events in T
+  years; the suggestion is the posterior mean, with a 90% interval;
+- loss per event (lognormal P10/P90 estimates), credibility weighting on the
+  log scale: the estimate counts as 5 events, a benchmark as its weight, each
+  observed loss as one. Other loss shapes are compared, not adjusted.
+
+Observed events happen with the controls in place, so the residual estimate
+is calibrated when the risk has one. Nothing changes by itself:
+`POST /api/risks/{id}/calibration/apply` (or the button in the GUI and web
+app) replaces the estimate and records the basis in the audit log.
+
+```bash
+riskmesh calibrate                       # every risk with evidence: estimate, data, suggestion
+riskmesh calibrate "Database outage"     # the details; --apply to accept, --expert-years 4 to trust it more
+```
+
+Load many rows through the Excel workbook: the sheets *Observations* and
+*Benchmarks* (a workbook with only those sheets leaves everything else as it
+is). API: `/api/observations`, `/api/benchmarks`, `/api/calibration`,
+`/api/risks/{id}/calibration`. The desktop application has a *Data* page and
+the web app a *Data & Calibration* page.
+
 ## Incidents: the reporting clock
 
 An **incident** records when we became aware of it (`detected_at`, local time

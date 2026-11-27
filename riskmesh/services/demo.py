@@ -78,6 +78,7 @@ def seed_demo(svc: RiskService) -> None:
         impact={"dist": "lognorm_p10_p90", "p10": 200_000, "p90": 5_000_000},
         category="cyber", asset_ids=[db.id], owner_id=jane.id,
         residual_frequency={"type": "poisson", "rate": 0.05}, service_ids=[portal.id, metering.id],
+        evidence_categories=["ransomware"],
     )
     outage = svc.create_risk(
         it.id, "Database outage",
@@ -87,6 +88,7 @@ def seed_demo(svc: RiskService) -> None:
         supplier_ids=[hosting.id],
         outage_hours={"dist": "lognorm_p10_p90", "p10": 1, "p90": 24},
         residual_outage_hours={"dist": "lognorm_p10_p90", "p10": 0.5, "p90": 8},
+        evidence_categories=["hosting outage"],
     )
     breach = svc.create_risk(
         dev.id, "Web app data breach",
@@ -94,12 +96,13 @@ def seed_demo(svc: RiskService) -> None:
         impact={"dist": "lognorm_p10_p90", "p10": 100_000, "p90": 3_000_000},
         category="cyber", asset_ids=[webapp.id], owner_id=david.id, service_ids=[portal.id],
         residual_impact={"dist": "lognorm_p10_p90", "p10": 50_000, "p90": 1_500_000},
+        evidence_categories=["data breach"],
     )
     fraud = svc.create_risk(
         finance.id, "Payment fraud",
         frequency={"type": "poisson", "rate": 0.5},
         impact={"dist": "lognorm_p10_p90", "p10": 20_000, "p90": 400_000},
-        category="financial", asset_ids=[records.id], owner_id=john.id,
+        category="financial", asset_ids=[records.id], owner_id=john.id, evidence_categories=["payment fraud"],
     )
     svc.create_risk(
         hr.id, "Loss of key personnel",
@@ -146,6 +149,25 @@ def seed_demo(svc: RiskService) -> None:
                         nis2_significant=True, owner_id=jane.id,
                         description="Power loss at the data centre behind Nordic Cloud; portal and meter hub down",
                         notifications={"nis2:early_warning": (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M")})
+
+    # Evidence: what we have recorded since January 2025, and public figures (illustrative only:
+    # replace them with real sources such as a national statistics office or the data protection authority)
+    for d, n, loss in (("2025-02-11", 1, 18_000), ("2025-05-03", 2, 41_000), ("2025-09-22", 1, 9_500),
+                       ("2026-01-15", 1, 64_000), ("2026-04-08", 1, 12_000), ("2026-08-30", 1, 27_000)):
+        svc.create_observation(d, "hosting outage", count=n, loss=loss, supplier_id=hosting.id,
+                               source="Incident log")
+    svc.create_observation("2025-06-17", "data breach", loss=85_000, business_unit_id=dev.id, source="Incident log",
+                           description="Customer data exposed through a misconfigured API")
+    svc.create_observation("2025-03-12", "payment fraud", loss=35_000, business_unit_id=finance.id,
+                           source="Insurance claims")
+    svc.create_observation("2026-08-02", "payment fraud", loss=60_000, business_unit_id=finance.id,
+                           source="Insurance claims")
+    svc.create_benchmark("Illustrative: data breaches in mid-size companies", "data breach",
+                         source="Example figure - replace with a real source", year=2025,
+                         events_per_year=0.12, loss_p10=40_000, loss_p90=1_200_000, weight=2)
+    svc.create_benchmark("Illustrative: ransomware against mid-size companies", "ransomware",
+                         source="Example figure - replace with a real source", year=2025,
+                         events_per_year=0.04, loss_p10=250_000, loss_p90=4_000_000, weight=3)
 
     # Controls and their tests
     edr = svc.create_control(it.id, "EDR on all endpoints", control_type="PREVENTIVE",

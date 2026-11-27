@@ -118,6 +118,9 @@ class Risk(Entity):
     # all driven by the same duration (common shock, see consequences.py).
     outage_hours: Optional[Dict[str, Any]] = None
     residual_outage_hours: Optional[Dict[str, Any]] = None
+    # which categories of observed events and public benchmarks are evidence for this risk
+    # (e.g. ["data breach", "phishing"]); the risk's own category always counts too
+    evidence_categories: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -212,6 +215,47 @@ class Incident(Entity):
     root_cause: Optional[str] = None
     financial_impact: Optional[float] = None
     notifications: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Observation(Entity):
+    """
+    Something that actually happened, as data: one event or a count of them
+    (e.g. "12 phishing incidents in March"). Its level follows from what it
+    names: a supplier, a business unit, or neither (the whole group).
+    Used to check and calibrate the estimates of the risks it is evidence for.
+    """
+    kind: ClassVar[str] = "observation"
+    date: str                                   # ISO date of the event (or the end of the period counted)
+    category: str                               # e.g. "data breach", "security incident"
+    count: int = 1
+    loss: Optional[float] = None                # total loss of these events, if known
+    business_unit_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    risk_id: Optional[str] = None               # when it is known which risk it was
+    description: Optional[str] = None
+    source: Optional[str] = None                # e.g. "incident log", "insurance claims 2025"
+
+
+@dataclass
+class Benchmark(Entity):
+    """
+    A public figure for organisations like ours, e.g. from a national
+    statistics office, a data protection authority or an industry report:
+    how often an event happens per year and/or what one costs. `weight` says
+    how much it counts: in years of our own data for the frequency, in
+    observed events for the loss.
+    """
+    kind: ClassVar[str] = "benchmark"
+    name: str
+    category: str
+    source: Optional[str] = None                # citation or URL
+    year: Optional[int] = None
+    events_per_year: Optional[float] = None     # for an organisation like ours
+    loss_p10: Optional[float] = None            # per event
+    loss_p90: Optional[float] = None
+    weight: float = 1.0
+    notes: Optional[str] = None
 
 
 @dataclass
@@ -445,7 +489,7 @@ class PeriodFact(Entity):
 
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Correlation, Appetite, Control,
-              RiskEvent, ControlEvent, Incident)
+              RiskEvent, ControlEvent, Incident, Observation, Benchmark)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
 VERIFIED_TYPES = DATA_TYPES + (User, ReportingPeriod)
@@ -482,4 +526,7 @@ REFERENCES = [
     (Incident, "supplier_ids", Supplier, True, "STARTED_AT"),
     (Incident, "risk_id", Risk, False, "MATERIALISED"),
     (Incident, "owner_id", Person, False, "HANDLED_BY"),
+    (Observation, "business_unit_id", BusinessUnit, False, "OBSERVED_AT"),
+    (Observation, "supplier_id", Supplier, False, "OBSERVED_AT"),
+    (Observation, "risk_id", Risk, False, "EVIDENCE_FOR"),
 ]

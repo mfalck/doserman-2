@@ -10,8 +10,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ..domain import risk_model
 from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
-                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, Appetite, BusinessUnit, Control,
-                             Correlation, Customer, Incident, Risk, Service, Supplier)
+                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, Appetite, Benchmark, BusinessUnit,
+                             Control, Correlation, Customer, Incident, Observation, Risk, Service, Supplier)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 
@@ -114,8 +114,11 @@ class RiskDialog(BaseDialog):
         self.owner = _person_combo(svc, risk.owner_id if risk else None)
         self.description = QPlainTextEdit((risk.description or "") if risk else "")
         self.description.setFixedHeight(50)
+        self.evidence = QLineEdit(_csv(risk.evidence_categories) if risk else "")
+        self.evidence.setPlaceholderText("observed event categories that count for this risk, e.g. data breach")
         for label, w in (("Name", self.name), ("Organisation", self.unit), ("Risk type", self.category),
-                         ("Risk owner", self.owner), ("Description", self.description)):
+                         ("Risk owner", self.owner), ("Evidence categories", self.evidence),
+                         ("Description", self.description)):
             self.form.addRow(label, w)
 
         inherent = QGroupBox("Inherent risk (without controls)")
@@ -220,7 +223,7 @@ class RiskDialog(BaseDialog):
             "residual_frequency": self.res_freq.spec() if residual else None,
             "residual_impact": self.res_impact.spec() if residual else None,
             "service_ids": _checked(self.services),
-            "supplier_ids": _checked(self.suppliers),
+            "supplier_ids": _checked(self.suppliers), "evidence_categories": _split(self.evidence.text()),
             "outage_hours": self.outage.spec() if self.has_outage.isChecked() else None,
             "residual_outage_hours": (self.res_outage.spec() if self.has_outage.isChecked()
                                       and self.res_outage.spec() != self.outage.spec() else None),
@@ -616,6 +619,99 @@ class IncidentDialog(BaseDialog):
                 "resolved_at": self.resolved.text().strip() or None, "financial_impact": _float(self.impact),
                 "root_cause": self.root_cause.text().strip() or None,
                 "description": self.description.toPlainText().strip() or None}
+
+
+def _category_combo(svc: RiskService, value: str) -> QComboBox:
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.addItems(svc.evidence_categories())
+    combo.setCurrentText(value)
+    return combo
+
+
+class ObservationDialog(BaseDialog):
+    """An event that happened (or a count of them), at group, unit or supplier level."""
+
+    def __init__(self, svc: RiskService, obs: Optional[Observation] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit observation" if obs else "New observation", obs is not None, parent)
+        from datetime import date
+        o = obs
+        self.date = QLineEdit(o.date if o else date.today().isoformat())
+        self.date.setPlaceholderText("YYYY-MM-DD")
+        self.category = _category_combo(svc, o.category if o else "")
+        self.count = QSpinBox()
+        self.count.setRange(0, 1_000_000)
+        self.count.setValue(o.count if o else 1)
+        self.loss = QLineEdit("" if not o or o.loss is None else f"{o.loss:g}")
+        self.loss.setPlaceholderText("total loss of these events, if known")
+        self.level = QComboBox()
+        self.level.addItem("The whole group", "group:")
+        for u in svc.list_business_units():
+            self.level.addItem(f"Unit: {u.name}", f"unit:{u.id}")
+        for s in svc.list_suppliers():
+            self.level.addItem(f"Supplier: {s.name}", f"supplier:{s.id}")
+        if o and o.business_unit_id:
+            self.level.setCurrentIndex(max(0, self.level.findData(f"unit:{o.business_unit_id}")))
+        elif o and o.supplier_id:
+            self.level.setCurrentIndex(max(0, self.level.findData(f"supplier:{o.supplier_id}")))
+        self.risk = QComboBox()
+        self.risk.addItem("(by category)", None)
+        for r in sorted(svc.list_risks(), key=lambda r: r.name):
+            self.risk.addItem(r.name, r.id)
+        if o and o.risk_id:
+            self.risk.setCurrentIndex(max(0, self.risk.findData(o.risk_id)))
+        self.source = QLineEdit((o.source or "") if o else "")
+        self.source.setPlaceholderText("e.g. incident log - the period counts from its first entry")
+        self.description = QLineEdit((o.description or "") if o else "")
+        for label, w in (("Date", self.date), ("Category", self.category), ("Count", self.count), ("Loss", self.loss),
+                         ("Level", self.level), ("Risk", self.risk), ("Source", self.source),
+                         ("Description", self.description)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        level, ref = self.level.currentData().split(":", 1)
+        return {"date": self.date.text().strip(), "category": self.category.currentText().strip(),
+                "count": self.count.value(), "loss": _float(self.loss),
+                "business_unit_id": ref if level == "unit" else None,
+                "supplier_id": ref if level == "supplier" else None, "risk_id": self.risk.currentData(),
+                "source": self.source.text().strip() or None, "description": self.description.text().strip() or None}
+
+
+class BenchmarkDialog(BaseDialog):
+    """A public figure for organisations like ours."""
+
+    def __init__(self, svc: RiskService, bm: Optional[Benchmark] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit benchmark" if bm else "New benchmark", bm is not None, parent)
+        b = bm
+        self.name = QLineEdit(b.name if b else "")
+        self.category = _category_combo(svc, b.category if b else "")
+        self.rate = QLineEdit("" if not b or b.events_per_year is None else f"{b.events_per_year:g}")
+        self.rate.setPlaceholderText("for an organisation like ours, e.g. 0.1 = once in 10 years")
+        self.p10 = QLineEdit("" if not b or b.loss_p10 is None else f"{b.loss_p10:g}")
+        self.p90 = QLineEdit("" if not b or b.loss_p90 is None else f"{b.loss_p90:g}")
+        self.weight = QDoubleSpinBox()
+        self.weight.setRange(0.1, 100)
+        self.weight.setValue(b.weight if b else 1.0)
+        self.weight.setToolTip("Years of our own data (frequency) and events (loss) it is worth")
+        self.year = QSpinBox()
+        self.year.setRange(0, 2100)
+        self.year.setSpecialValueText("-")
+        self.year.setValue((b.year or 0) if b else 0)
+        self.source = QLineEdit((b.source or "") if b else "")
+        self.source.setPlaceholderText("citation or URL")
+        self.notes = QLineEdit((b.notes or "") if b else "")
+        for label, w in (("Name", self.name), ("Category", self.category), ("Events per year", self.rate),
+                         ("Loss per event, low P10", self.p10), ("Loss per event, high P90", self.p90),
+                         ("Weight", self.weight), ("Year", self.year), ("Source", self.source), ("Notes", self.notes)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        return {"name": self.name.text(), "category": self.category.currentText().strip(),
+                "events_per_year": _float(self.rate), "loss_p10": _float(self.p10), "loss_p90": _float(self.p90),
+                "weight": self.weight.value(), "year": self.year.value() or None,
+                "source": self.source.text().strip() or None, "notes": self.notes.text().strip() or None}
 
 
 class LoginDialog(QDialog):

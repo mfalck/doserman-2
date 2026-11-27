@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
                                QVBoxLayout, QWidget)
 
 from ..services import RiskService
-from .dialogs import (AppetiteDialog, ControlDialog, CorrelationDialog, CustomerDialog, IncidentDialog, RiskDialog,
-                      ServiceDialog, SupplierDialog, UnitDialog)
+from .dialogs import (AppetiteDialog, BenchmarkDialog, ControlDialog, CorrelationDialog, CustomerDialog,
+                      IncidentDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog, UnitDialog)
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
 
@@ -1218,6 +1218,167 @@ class IncidentsPage(Page):
             self.changed()
 
 
+class EvidencePage(Page):
+    """Observed events and public benchmarks, and what they say about the estimates."""
+
+    TABS = ("Calibration", "Observations", "Benchmarks")
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Data and calibration"))
+        intro = QLabel("Observed events (with their level: group, unit or supplier) and public benchmarks check the "
+                       "estimates. Nothing changes until you apply a suggestion. Import many rows at once through the "
+                       "Excel workbook (sheets Observations and Benchmarks).")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        bar = QHBoxLayout()
+        self.kind = QComboBox()
+        self.kind.addItems(self.TABS)
+        self.kind.currentIndexChanged.connect(self.refresh)
+        bar.addWidget(self.kind)
+        self.expert = QSpinBox()
+        self.expert.setRange(1, 20)
+        self.expert.setValue(2)
+        self.expert.setSuffix(" years")
+        self.expert.setToolTip("How much the current estimate counts, in years of data")
+        self.expert.valueChanged.connect(self.refresh)
+        bar.addWidget(QLabel("Estimate worth"))
+        bar.addWidget(self.expert)
+        bar.addStretch()
+        self.apply_btn = QPushButton("Apply suggestion")
+        self.apply_btn.clicked.connect(self.apply)
+        self.edit_buttons.append(self.apply_btn)
+        bar.addWidget(self.apply_btn)
+        for text, slot in (("New", self.add), ("Edit", self.edit), ("Delete", self.delete)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        self.layout_.addLayout(bar)
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Name"])
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.table.itemSelectionChanged.connect(self.show_detail)
+        split.addWidget(self.table)
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        split.addWidget(self.detail)
+        self.layout_.addWidget(split, 1)
+
+    def _tab(self) -> str:
+        return self.kind.currentText()
+
+    def refresh(self) -> None:
+        tab = self._tab()
+        self.apply_btn.setVisible(tab == "Calibration")
+        units = unit_names(self.svc)
+        sups = {s.id: s.name for s in self.svc.list_suppliers()}
+        risks = {r.id: r.name for r in self.svc.list_risks()}
+        if tab == "Calibration":
+            rows_ = self.svc.calibration_overview(float(self.expert.value()))
+            headers = ["Risk", "Events", "Years", "Benchmarks", "Estimate /yr", "Data /yr", "Suggested /yr", "Change",
+                       "Loss median"]
+            pct = lambda v: "" if v is None else f"{v:+.0%}"  # noqa: E731
+            rows = [[r["name"], r["events"], f"{r['years']:.1f}", r["benchmarks"], f"{r['current_rate']:.3f}",
+                     "" if r["observed_rate"] is None else f"{r['observed_rate']:.3f}", f"{r['calibrated_rate']:.3f}",
+                     pct(r["rate_change"]), pct(r["impact_change"])] for r in rows_]
+            keys, numeric = [r["id"] for r in rows_], [1, 2, 3, 4, 5, 6]
+            colors = {(i, 7): "#fecaca" if (r["rate_change"] or 0) > 0.25 else "#bbf7d0" if (r["rate_change"] or 0) < -0.25
+                      else "#f1f5f9" for i, r in enumerate(rows_)}
+        elif tab == "Observations":
+            obs = self.svc.list_observations()
+            headers = ["Date", "Category", "Count", "Loss", "Level", "Risk", "Source"]
+            rows = [[o.date, o.category, o.count, money(o.loss) if o.loss is not None else "",
+                     f"supplier {sups.get(o.supplier_id, '?')}" if o.supplier_id else
+                     f"unit {units.get(o.business_unit_id, '?')}" if o.business_unit_id else "group",
+                     risks.get(o.risk_id, "") if o.risk_id else "", o.source or ""] for o in obs]
+            keys, numeric, colors = [o.id for o in obs], [2, 3], {}
+        else:
+            bms = self.svc.list_benchmarks()
+            headers = ["Benchmark", "Category", "Events /yr", "Loss P10", "Loss P90", "Weight", "Year", "Source"]
+            rows = [[b.name, b.category, "" if b.events_per_year is None else f"{b.events_per_year:g}",
+                     money(b.loss_p10) if b.loss_p10 else "", money(b.loss_p90) if b.loss_p90 else "",
+                     f"{b.weight:g}", b.year or "", b.source or ""] for b in bms]
+            keys, numeric, colors = [b.id for b in bms], [2, 3, 4, 5], {}
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.numeric = set(numeric)
+        self.table.fill(rows, keys=keys, colors=colors)
+        self.detail.clear()
+
+    def show_detail(self) -> None:
+        key = self.table.selected_key()
+        if not key or self._tab() != "Calibration":
+            return
+        c = self.svc.calibrate_risk(key, float(self.expert.value()))
+        f = c["frequency"]
+        lines = [f"{c['risk']['name']} - evidence categories: {', '.join(c['risk']['evidence_categories']) or '-'}",
+                 f"Data since {c['since'] or '-'} ({c['years']:g} years): {f['events']} events; "
+                 f"{len(c['benchmarks'])} benchmarks",
+                 f"{c['frequency_field']}: {f['current_rate']:.3f}/year -> {f['calibrated_rate']:.3f}/year "
+                 f"(90% {f['interval'][0]:.3f}-{f['interval'][1]:.3f})"]
+        if c["impact"]:
+            i = c["impact"]
+            lines.append(f"{c['impact_field']}: P10-P90 {money(i['current']['p10']).strip()} - "
+                         f"{money(i['current']['p90']).strip()} -> {money(i['suggested']['p10']).strip()} - "
+                         f"{money(i['suggested']['p90']).strip()} ({i['observed']['count']} observed losses)")
+        else:
+            lines.append(c["impact_note"])
+        lines += [""] + [f"  {o['date']}  {o['category']:<18} x{o['count']:<4} {money(o['loss']) if o['loss'] else '':>14}"
+                         f"  {o['level']}" for o in c["observations"]]
+        lines += [f"  benchmark  {b['name']} (weight {b['weight']:g})" for b in c["benchmarks"]]
+        self.detail.setPlainText("\n".join(lines))
+
+    def apply(self) -> None:
+        key = self.table.selected_key()
+        if not key or self._tab() != "Calibration":
+            QMessageBox.information(self, "Calibration", "Select a risk in the Calibration list first.")
+            return
+        name = self.svc.get_risk(key).name
+        if QMessageBox.question(self, "Apply suggestion", f"Replace the estimate of '{name}' with the suggestion?\n\n"
+                                "It is recorded in the audit log with the data it is based on.") != QMessageBox.Yes:
+            return
+        if guarded(self, lambda: self.svc.apply_calibration(key, expert_years=float(self.expert.value()))):
+            self.changed()
+
+    def _ops(self):
+        if self._tab() == "Observations":
+            return (ObservationDialog, self.svc.get_observation, self.svc.update_observation,
+                    self.svc.delete_observation,
+                    lambda v: self.svc.create_observation(v.pop("date"), v.pop("category"), **v))
+        return (BenchmarkDialog, self.svc.get_benchmark, self.svc.update_benchmark, self.svc.delete_benchmark,
+                lambda v: self.svc.create_benchmark(v.pop("name"), v.pop("category"), **v))
+
+    def add(self):
+        if self._tab() == "Calibration":
+            self.kind.setCurrentText("Observations")
+        dialog_cls, _, _, _, create = self._ops()
+        dialog = dialog_cls(self.svc, parent=self)
+        if dialog.exec() and guarded(self, lambda: create(dialog.values())):
+            self.changed()
+
+    def edit(self):
+        key = self.table.selected_key()
+        if not key or self._tab() == "Calibration":
+            return
+        dialog_cls, get, update, _, _ = self._ops()
+        dialog = dialog_cls(self.svc, get(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: update(key, **dialog.values())):
+                    self.changed()
+
+    def delete(self):
+        key = self.table.selected_key()
+        if not key or self._tab() == "Calibration":
+            return
+        _, _, _, remove, _ = self._ops()
+        if QMessageBox.question(self, "Delete", "Delete the selected row?") == QMessageBox.Yes:
+            if guarded(self, lambda: remove(key)) is not None:
+                self.changed()
+
+
 def _editor_only(method):
     """Viewers can open pages but not change anything (double-clicks included)."""
     @functools.wraps(method)
@@ -1233,6 +1394,7 @@ for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (RisksPage, ("add", "edit", "delete")), (ControlsPage, ("add", "edit", "delete")),
                      (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete")),
                      (IncidentsPage, ("add", "edit", "delete", "mark")),
+                     (EvidencePage, ("add", "edit", "delete", "apply")),
                      (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
                                       "edit_correlation", "delete_correlation"))):
     for _name in _names:

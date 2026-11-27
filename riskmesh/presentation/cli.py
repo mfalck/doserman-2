@@ -339,6 +339,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
+    calp = sub.add_parser("calibrate", help="what observed events and benchmarks say about the estimates")
+    calp.add_argument("risk", nargs="?", help="risk name: show the details (and --apply)")
+    calp.add_argument("--expert-years", type=float, default=2.0, help="weight of the estimate in years of data")
+    calp.add_argument("--apply", action="store_true", help="replace the risk's estimate with the suggestion")
     sub.add_parser("risks", help="list risks with analytical expected annual loss")
 
     sim = sub.add_parser("simulate", help="run a Monte Carlo simulation")
@@ -580,6 +584,36 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "calibrate":
+        if not args.risk:
+            print(f"{'Risk':<26}{'Events':>7}{'Years':>7}{'Estimate':>10}{'Data':>9}{'Suggested':>11}  Loss")
+            for r in svc.calibration_overview(args.expert_years):
+                obs = "-" if r["observed_rate"] is None else f"{r['observed_rate']:.2f}"
+                loss = "" if r["impact_change"] is None else f"{r['impact_change']:+.0%} median"
+                print(f"{r['name'][:25]:<26}{r['events']:>7}{r['years']:>7.1f}{r['current_rate']:>10.2f}{obs:>9}"
+                      f"{r['calibrated_rate']:>11.2f}  {loss}")
+            print("\nEvents per year. Details: riskmesh calibrate \"<risk>\"  (--apply to accept)")
+            return 0
+        risk = _find(svc.list_risks(), args.risk)
+        if not risk:
+            print(f"Error: no risk called {args.risk!r}", file=sys.stderr)
+            return 1
+        c = svc.calibrate_risk(risk.id, args.expert_years)
+        f = c["frequency"]
+        print(f"{risk.name}: evidence categories {', '.join(c['risk']['evidence_categories']) or '-'}")
+        print(f"Data since {c['since'] or '-'} ({c['years']:g} years): {f['events']} events, "
+              f"{len(c['benchmarks'])} benchmarks")
+        print(f"{c['frequency_field']}: {f['current_rate']:.3f}/year -> suggested {f['calibrated_rate']:.3f}/year "
+              f"(90% {f['interval'][0]:.3f}-{f['interval'][1]:.3f})")
+        if c["impact"]:
+            i = c["impact"]
+            print(f"{c['impact_field']}: P10-P90 {i['current']['p10']:,.0f}-{i['current']['p90']:,.0f} -> "
+                  f"{i['suggested']['p10']:,.0f}-{i['suggested']['p90']:,.0f} ({i['observed']['count']} observed losses)")
+        else:
+            print(c["impact_note"])
+        if args.apply:
+            svc.apply_calibration(risk.id, expert_years=args.expert_years)
+            print("Applied (recorded in the audit log).")
     elif args.command == "incidents":
         o = svc.incident_overview()
         if not o["open"]:

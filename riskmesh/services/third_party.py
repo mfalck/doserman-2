@@ -79,7 +79,9 @@ class ThirdParty:
         return self._update(Supplier, supplier_id, changes)
 
     def delete_supplier(self, supplier_id: str) -> None:
-        """Removes it from services, risks and other suppliers' subcontractor lists."""
+        """Removes it from services, risks and other suppliers' subcontractor lists; its observations go with it."""
+        self.get_supplier(supplier_id)
+        self._delete_observations_at("supplier_id", supplier_id)
         self._delete(Supplier, supplier_id)
 
     # -- services ---------------------------------------------------------------------------

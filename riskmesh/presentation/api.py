@@ -431,6 +431,59 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def delete_supplier(supplier_id: str):
         svc.delete_supplier(supplier_id)
 
+    @api.get("/observations", response_model=List[s.ObservationOut], tags=["evidence"])
+    async def list_observations(category: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_observations(category)]
+
+    @api.post("/observations", response_model=s.ObservationOut, status_code=201, tags=["evidence"])
+    async def create_observation(body: s.ObservationCreate):
+        d = body.model_dump()
+        return svc.create_observation(d.pop("date"), d.pop("category"), **d).to_dict()
+
+    @api.patch("/observations/{observation_id}", response_model=s.ObservationOut, tags=["evidence"])
+    async def update_observation(observation_id: str, body: s.ObservationUpdate):
+        return svc.update_observation(observation_id, **_changes(body)).to_dict()
+
+    @api.delete("/observations/{observation_id}", status_code=204, tags=["evidence"])
+    async def delete_observation(observation_id: str):
+        svc.delete_observation(observation_id)
+
+    @api.get("/benchmarks", response_model=List[s.BenchmarkOut], tags=["evidence"])
+    async def list_benchmarks():
+        return [x.to_dict() for x in svc.list_benchmarks()]
+
+    @api.post("/benchmarks", response_model=s.BenchmarkOut, status_code=201, tags=["evidence"])
+    async def create_benchmark(body: s.BenchmarkCreate):
+        d = body.model_dump()
+        return svc.create_benchmark(d.pop("name"), d.pop("category"), **d).to_dict()
+
+    @api.patch("/benchmarks/{benchmark_id}", response_model=s.BenchmarkOut, tags=["evidence"])
+    async def update_benchmark(benchmark_id: str, body: s.BenchmarkUpdate):
+        return svc.update_benchmark(benchmark_id, **_changes(body)).to_dict()
+
+    @api.delete("/benchmarks/{benchmark_id}", status_code=204, tags=["evidence"])
+    async def delete_benchmark(benchmark_id: str):
+        svc.delete_benchmark(benchmark_id)
+
+    @api.get("/evidence/categories", tags=["evidence"])
+    async def evidence_categories():
+        return svc.evidence_categories()
+
+    @api.get("/calibration", tags=["evidence"])
+    async def calibration_overview(expert_years: float = 2.0, expert_events: float = 5.0):
+        """Every risk with evidence: its estimate, what the data says and the suggested estimate."""
+        return svc.calibration_overview(expert_years, expert_events)
+
+    @api.get("/risks/{risk_id}/calibration", tags=["evidence"])
+    async def calibrate_risk(risk_id: str, expert_years: float = 2.0, expert_events: float = 5.0,
+                             since: Optional[str] = None):
+        return svc.calibrate_risk(risk_id, expert_years, expert_events, since)
+
+    @api.post("/risks/{risk_id}/calibration/apply", tags=["evidence"])
+    async def apply_calibration(risk_id: str, body: s.CalibrationApply):
+        """Replaces the estimate with the suggestion (recorded in the audit log with its basis)."""
+        return svc.apply_calibration(risk_id, **body.model_dump()).to_dict()
+
     @api.get("/incidents/overview", tags=["incidents"])
     async def incident_overview():
         """Open incidents and every reporting / notification deadline not met yet, soonest first."""
