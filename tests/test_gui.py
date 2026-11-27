@@ -97,3 +97,14 @@ def test_login_dialog(app):
     d.password.setText("correct horse battery")
     d.try_login()
     assert d.user.username == "ed"
+
+
+def test_reports_page_closes_and_compares(window):
+    page = window.pages[window.PAGES.index("Reports")]
+    window.svc.close_period("2026-Q3")
+    window.svc.update_risk(window.svc.list_risks()[0].id, frequency={"type": "poisson", "rate": 4})
+    window.svc.close_period("2026-Q4")
+    page.refresh()
+    assert page.periods.rowCount() == 2 and page.trend.rowCount() == 2
+    page.compare()
+    assert page.bridge.rowCount() == 6 and page.changes.rowCount() == 7

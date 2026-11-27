@@ -70,6 +70,12 @@ currency = "DKK"
 [user]
 name = ""                           # name recorded in the audit log by the GUI/CLI (default: login name)
 
+[audit]
+# Anchoring makes removal of the newest audit entries detectable (see README).
+signing_key = ""                    # Ed25519 private key file (riskmesh audit keygen); relative to this file
+tsa_url = ""                        # RFC 3161 time-stamp authority, e.g. "https://freetsa.org/tsr" (only a hash is sent)
+anchor_on_period_close = true
+
 [auth]
 # none       = no login (single user on your own machine; the API is open to anyone who can reach it)
 # local      = RiskMesh users with passwords (create the first admin: riskmesh users create-admin)
@@ -112,6 +118,9 @@ class Settings:
     impact_bands: Tuple[float, ...] = (50_000, 250_000, 1_000_000, 5_000_000)
     currency: str = "DKK"
     user_name: Optional[str] = None
+    audit_signing_key: Optional[str] = None
+    audit_tsa_url: Optional[str] = None
+    anchor_on_period_close: bool = True
     auth_mode: str = "none"            # none | local | oidc | local+oidc
     session_hours: float = 12
     oidc_issuer: Optional[str] = None
@@ -236,6 +245,11 @@ def load_settings(path: Optional[str] = None) -> Settings:
         s.impact_bands = tuple(scoring.get("impact_bands", s.impact_bands))
         s.currency = scoring.get("currency", s.currency)
         s.user_name = data.get("user", {}).get("name") or None
+        audit_cfg = data.get("audit", {})
+        if audit_cfg.get("signing_key"):
+            s.audit_signing_key = _resolve_path(audit_cfg["signing_key"], base)
+        s.audit_tsa_url = audit_cfg.get("tsa_url") or None
+        s.anchor_on_period_close = bool(audit_cfg.get("anchor_on_period_close", True))
         auth = data.get("auth", {})
         oidc = auth.get("oidc", {})
         s.auth_mode = auth.get("mode", s.auth_mode)
@@ -262,6 +276,8 @@ def load_settings(path: Optional[str] = None) -> Settings:
     s.neo4j_database = _env("RISKMESH_NEO4J_DATABASE") or s.neo4j_database
     s.api_key = _env("RISKMESH_API_KEY") or s.api_key
     s.auth_mode = _env("RISKMESH_AUTH_MODE") or s.auth_mode
+    s.audit_signing_key = _env("RISKMESH_AUDIT_SIGNING_KEY") or s.audit_signing_key
+    s.audit_tsa_url = _env("RISKMESH_AUDIT_TSA_URL") or s.audit_tsa_url
     s.oidc_client_secret = _env("RISKMESH_OIDC_CLIENT_SECRET") or s.oidc_client_secret
     if _env("RISKMESH_CORS_ORIGINS"):
         s.cors_origins = [o.strip() for o in _env("RISKMESH_CORS_ORIGINS").split(",") if o.strip()]

@@ -155,3 +155,20 @@ def test_runs_are_stored_reused_and_labelled(client):
     assert client.get(f"/api/runs/{runs[1]['id']}").json()["residual"]["total"]["mean"] > 0
     assert client.post(f"/api/runs/{runs[0]['id']}/reproduce").json()["reproducible"] is True
     assert client.get("/api/runs/missing").status_code == 404
+
+
+def test_period_endpoints(client):
+    bu = client.post("/api/business-units", json={"name": "IT"}).json()
+    client.post("/api/risks", json={"name": "Outage", "business_unit_id": bu["id"],
+                                    "frequency": {"type": "poisson", "rate": 1},
+                                    "impact": {"dist": "fixed", "value": 100}})
+    assert client.post("/api/periods/2026-Q3/close", json={"note": "Q3"}).status_code == 200
+    assert client.post("/api/periods/2026-Q3/close", json={}).status_code == 409
+    client.post("/api/periods/2026-Q4/close", json={})
+    assert [p["key"] for p in client.get("/api/periods").json()] == ["2026-Q4", "2026-Q3"]
+    assert client.get("/api/reports/compare?a=2026-Q3&b=2026-Q4").json()["bridge"]["end"] == 100
+    assert len(client.get("/api/reports/trend").json()) == 2
+    csv = client.get("/api/reports/facts.csv")
+    assert csv.headers["content-type"].startswith("text/csv") and "period_key" in csv.text
+    assert client.get("/api/periods/2026-Q3/facts?level=risk").json()[0]["name"] == "Outage"
+    assert client.post("/api/audit-log/anchor", json={}).status_code == 422  # not configured

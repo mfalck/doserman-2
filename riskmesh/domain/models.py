@@ -228,11 +228,88 @@ class ApiToken(Entity):
     revoked: bool = False
 
 
+@dataclass
+class AuditAnchor(Entity):
+    """
+    A signed and/or third-party time-stamped statement "the audit chain had
+    entry #seq with hash H at time T". Kept outside the chain so that removing
+    the newest entries (which the chain itself cannot reveal) is detected.
+    """
+    kind: ClassVar[str] = "audit_anchor"
+    seq: int
+    head_hash: str
+    statement: str                       # canonical JSON that was signed
+    signature: Optional[str] = None      # Ed25519, base64
+    public_key: Optional[str] = None     # PEM of the signing key
+    key_id: Optional[str] = None         # short fingerprint of the public key
+    tsa_url: Optional[str] = None        # RFC 3161 time-stamp authority
+    tsa_token: Optional[str] = None      # DER time-stamp token, base64
+    tsa_time: Optional[str] = None       # time asserted by the authority
+    reason: Optional[str] = None         # e.g. "period 2026-Q4 closed"
+    created_by: str = "system"
+
+
+PERIOD_TYPES = ("month", "quarter", "year")
+
+
+@dataclass
+class ReportingPeriod(Entity):
+    """A month, quarter or year whose figures are frozen when it is closed."""
+    kind: ClassVar[str] = "reporting_period"
+    key: str                             # "2026-11", "2026-Q4" or "2026"
+    period_type: str
+    start: str                           # ISO date, inclusive
+    end: str                             # ISO date, inclusive
+    status: str = "open"                 # open | closed
+    closed_at: Optional[str] = None
+    closed_by: Optional[str] = None
+    run_id: Optional[str] = None         # the analysis run the figures come from
+    anchor_id: Optional[str] = None      # audit anchor made at closing
+    facts_hash: Optional[str] = None     # SHA-256 of the period's facts: verify_audit detects edits
+    note: Optional[str] = None
+
+
+@dataclass
+class PeriodFact(Entity):
+    """
+    One row of the reporting fact table: the frozen figures of a closed period
+    for the total, a business unit (incl. sub-units), a category or a risk.
+    Flat on purpose, so Excel and Power BI can read it directly.
+    """
+    kind: ClassVar[str] = "period_fact"
+    period_key: str
+    period_end: str
+    level: str                           # total | unit | category | risk
+    entity_id: Optional[str] = None
+    name: Optional[str] = None
+    business_unit_id: Optional[str] = None
+    category: Optional[str] = None
+    risk_count: Optional[int] = None
+    high_risk_count: Optional[int] = None
+    eal_inherent: Optional[float] = None
+    eal_residual: Optional[float] = None
+    p50: Optional[float] = None
+    p90: Optional[float] = None
+    p99: Optional[float] = None
+    tvar99: Optional[float] = None
+    p99_inherent: Optional[float] = None
+    likelihood_inherent: Optional[int] = None
+    impact_inherent: Optional[int] = None
+    score_inherent: Optional[float] = None
+    likelihood_residual: Optional[int] = None
+    impact_residual: Optional[int] = None
+    score_residual: Optional[float] = None
+    controls: Optional[int] = None
+    control_effectiveness: Optional[float] = None
+    events: Optional[int] = None
+    actual_loss: Optional[float] = None
+
+
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Risk, Control, RiskEvent, ControlEvent)
-ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken)
+ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
-VERIFIED_TYPES = DATA_TYPES + (User,)
+VERIFIED_TYPES = DATA_TYPES + (User, ReportingPeriod)
 
 # (from type, field, to type, field is a list, graph relationship name)
 REFERENCES = [

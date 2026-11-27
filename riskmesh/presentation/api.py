@@ -25,7 +25,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -53,6 +53,10 @@ LOCKOUT_SECONDS = 60
 def required_role(method: str, path: str, query: Dict[str, str]) -> str:
     """The whole access policy in one place."""
     if path.startswith(("/api/users", "/api/tokens")):
+        return "admin"
+    if path.startswith("/api/periods/") and path.endswith(("/close", "/reopen")):
+        return "admin"  # official figures
+    if path == "/api/audit-log/anchor" and method == "POST":
         return "admin"
     if path == "/api/import":
         return "editor" if query.get("replace", "true").lower() == "false" else "admin"
@@ -518,6 +522,52 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def reproduce_run(run_id: str):
         """Recalculates the run and checks that the result is identical."""
         return svc.reproduce_run(run_id)
+
+    # -- periods and reports ------------------------------------------------
+
+    @api.get("/periods", tags=["reports"])
+    async def list_periods():
+        return [p.to_dict() for p in svc.list_periods()]
+
+    @api.post("/periods/{key}/close", tags=["reports"])
+    async def close_period(key: str, body: s.PeriodClose):
+        """Freezes the period's figures (admin). Anchors the audit chain if configured."""
+        return svc.close_period(key, body.note).to_dict()
+
+    @api.post("/periods/{key}/reopen", tags=["reports"])
+    async def reopen_period(key: str):
+        return svc.reopen_period(key).to_dict()
+
+    @api.get("/periods/{key}/facts", tags=["reports"])
+    async def period_facts(key: str, level: Optional[str] = None):
+        return [f.to_dict() for f in svc.period_facts(key, level)]
+
+    @api.get("/reports/facts.csv", tags=["reports"])
+    async def facts_csv():
+        """All frozen period figures as CSV (for Excel / Power BI)."""
+        from ..services.reporting import facts_to_csv
+        return Response(facts_to_csv(svc.period_facts()), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="riskmesh-period-facts.csv"'})
+
+    @api.get("/reports/trend", tags=["reports"])
+    async def trend(metric: str = "eal_residual", level: str = "total", entity_id: Optional[str] = None,
+                    period_type: Optional[str] = None):
+        return svc.trend(metric, level, entity_id, period_type)
+
+    @api.get("/reports/compare", tags=["reports"])
+    async def compare_periods(a: str, b: str):
+        return svc.compare_periods(a, b)
+
+    # -- audit anchors ----------------------------------------------------------
+
+    @api.get("/audit-log/anchors", tags=["audit"])
+    async def list_anchors():
+        return [a.to_dict() for a in svc.list_anchors()]
+
+    @api.post("/audit-log/anchor", status_code=201, tags=["audit"])
+    async def create_anchor(body: s.AnchorCreate):
+        """Signs and/or time-stamps the current chain head (admin)."""
+        return svc.create_anchor(body.reason).to_dict()
 
     # -- import / export ----------------------------------------------------
 

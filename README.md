@@ -212,10 +212,55 @@ With the SQL backend the database refuses `UPDATE` and `DELETE` on the audit
 table (triggers on SQLite; PostgreSQL trigger included but not yet tested).
 The JSON and Neo4j backends cannot block edits, but `verify` detects them.
 
-Limits: removing the *newest* entries cannot be detected from inside the system.
-Keep the head hash returned by `verify` somewhere else (e.g. in minutes or a
-signed e-mail) and compare later; signing/time-stamping the head is planned.
+### Anchors: proof from outside the chain
+
+The chain alone cannot reveal that its *newest* entries were removed. An
+**anchor** fixes "entry #n had hash H" in two independent ways (configure one
+or both in `[audit]`):
+
+* **Signature** (Ed25519): `riskmesh audit keygen` creates a key; set
+  `signing_key`. Keep the key file away from the database and note its key id
+  elsewhere - with full server access someone could otherwise re-sign.
+* **RFC 3161 time stamp**: set `tsa_url` (e.g. `https://freetsa.org/tsr` or a
+  qualified EU/Danish TSA). Only the chain-head hash is sent. The authority's
+  signature cannot be back-dated, so this is the stronger proof; it can be
+  checked independently with `openssl ts -verify`.
+
+Anchors are made with `riskmesh audit anchor` / `POST /api/audit-log/anchor`
+and automatically when a period is closed. `verify` then also reports removed
+newest entries, forged anchors and time stamps for another hash.
 `riskmesh demo` and `reset_all()` start a new chain.
+
+## Periods and reporting
+
+Closing a period freezes its figures:
+
+```powershell
+py -m riskmesh period close 2026-Q4 --note "Q4 risk assessment"   # also 2026-11 or 2026
+py -m riskmesh period compare 2026-Q3 2026-Q4
+py -m riskmesh period trend --metric p99
+py -m riskmesh period export facts.csv
+```
+
+Closing runs the analysis (stored as run "Period 2026-Q4"), writes a flat
+**fact table** for the total, every business unit (incl. sub-units), every
+category and every risk - expected loss with and without controls, P50/P90/
+P99/TVaR, 1-5 scores, number of controls, recorded events and actual losses in
+the period - records the facts' SHA-256 in the audit trail (so `verify`
+detects later edits) and anchors the chain if configured. Reopening (admin)
+removes the facts and is recorded too.
+
+The comparison of two periods explains the change in expected annual loss
+after controls as a **bridge**: new risks, removed risks, changed estimates
+(inherent loss of continuing risks) and the change in control effect; plus a
+risk-by-risk table and heat-map moves. The web app has a *Reports* page
+(trend, waterfall, comparison) and the desktop app a *Reports* tab.
+
+**Power BI / Excel.** With the SQL backend these read-only views are always
+up to date: `v_periods`, `v_period_total`, `v_period_unit`,
+`v_period_category`, `v_period_risk`. Connect Power BI to the database with a
+read-only user, or use the CSV from `GET /api/reports/facts.csv` /
+`riskmesh period export`.
 
 ```powershell
 py -m riskmesh --reason "annual review" import --merge backup.json

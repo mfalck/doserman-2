@@ -25,6 +25,8 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
                              RISK_EVENT_TYPES, Asset, AuditEntry, BusinessUnit, Control, ControlEvent, Entity,
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
+from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
+from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .users import USER_WRITE_METHODS, UserAdmin
 
 log = logging.getLogger(__name__)
@@ -53,7 +55,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
     return type(None) in typing.get_args(typing.get_type_hints(cls)[field_name])
 
 
-class RiskService(UserAdmin):
+class RiskService(UserAdmin, AnchorAdmin, Reporting):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -302,8 +304,12 @@ class RiskService(UserAdmin):
                     data_errors.append({"entity_type": key[0], "entity_id": key[1],
                                         "error": "missing from the data, but not deleted in the audit log"})
 
+        anchors = self.check_anchors({e.seq: e for e in entries})
+        if check_data:
+            data_errors.extend(self.check_periods())
         return {
-            "ok": not chain_errors and not data_errors,
+            "ok": not chain_errors and not data_errors and not anchors["anchor_errors"],
+            **anchors,
             "entries": len(entries),
             "head_seq": entries[-1].seq if entries else 0,
             "head_hash": entries[-1].hash if entries else audit.GENESIS,
@@ -1059,7 +1065,7 @@ WRITE_METHODS = (
     "create_control", "update_control", "delete_control", "create_risk_event", "update_risk_event",
     "delete_risk_event", "create_control_event", "update_control_event", "delete_control_event",
     "import_data", "label_run", "reset_all", "_store_run",
-) + USER_WRITE_METHODS
+) + USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS
 
 
 def _write(method):

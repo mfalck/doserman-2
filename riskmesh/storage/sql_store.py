@@ -30,6 +30,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 
 from ..domain.models import ENTITY_TYPES, ApiToken, AuditEntry, Entity, User
+from ..domain.audit import sha256 as audit_sha
 from .base import E, Repository, StorageError
 
 log = logging.getLogger(__name__)
@@ -97,6 +98,24 @@ _PROTECT = {
 }
 
 
+# Reporting views for Power BI, Excel etc. (read-only; columns are stable)
+_FIGURES = ("risk_count, high_risk_count, eal_inherent, eal_residual, p50, p90, p99, tvar99, p99_inherent, "
+            "score_inherent, score_residual, controls, events, actual_loss")
+VIEWS = {
+    "v_periods": "SELECT key AS period, period_type, start AS period_start, \"end\" AS period_end, status, "
+                 "closed_at, closed_by, note, run_id, anchor_id FROM reporting_periods",
+    "v_period_total": f"SELECT period_key AS period, period_end, {_FIGURES}, control_effectiveness "
+                      "FROM period_facts WHERE level = 'total'",
+    "v_period_unit": f"SELECT period_key AS period, period_end, entity_id AS unit_id, name AS unit, "
+                     f"business_unit_id AS parent_unit_id, {_FIGURES} FROM period_facts WHERE level = 'unit'",
+    "v_period_category": f"SELECT period_key AS period, period_end, entity_id AS category, {_FIGURES} "
+                         "FROM period_facts WHERE level = 'category'",
+    "v_period_risk": f"SELECT period_key AS period, period_end, entity_id AS risk_id, name AS risk, "
+                     f"business_unit_id AS unit_id, category, likelihood_inherent, impact_inherent, "
+                     f"likelihood_residual, impact_residual, {_FIGURES} FROM period_facts WHERE level = 'risk'",
+}
+
+
 class SqlRepository(Repository):
 
     def __init__(self, url: str = "sqlite:///riskmesh.db", echo: bool = False):
@@ -115,6 +134,9 @@ class SqlRepository(Repository):
 
     def _migrate(self) -> None:
         with self.engine.begin() as conn:
+            if conn.dialect.name == "postgresql":
+                # several processes may start at once: migrate one at a time
+                conn.execute(text("SELECT pg_advisory_xact_lock(727274)"))
             metadata.create_all(conn)
             row = conn.execute(select(META.c.value).where(META.c.key == "schema_version")).first()
             current = int(row[0]) if row else SCHEMA_VERSION
@@ -131,6 +153,20 @@ class SqlRepository(Repository):
             if conn.execute(select(LOCK.c.id)).first() is None:
                 conn.execute(insert(LOCK).values(id=1, n=0))
             self._protect_audit(conn)
+            self._ensure_views(conn)
+
+    def _ensure_views(self, conn: Connection) -> None:
+        """(Re)creates the reporting views only when their definition changed."""
+        version = audit_sha(VIEWS)
+        row = conn.execute(select(META.c.value).where(META.c.key == "views_version")).first()
+        existing = set(inspect(conn).get_view_names())
+        if row and row[0] == version and existing >= set(VIEWS):
+            return
+        for name, sql in VIEWS.items():
+            conn.execute(text(f"DROP VIEW IF EXISTS {name}"))
+            conn.execute(text(f"CREATE VIEW {name} AS {sql}"))
+        conn.execute(delete(META).where(META.c.key == "views_version"))
+        conn.execute(insert(META).values(key="views_version", value=version))
 
     def _add_missing_columns(self, conn: Connection) -> None:
         inspector = inspect(conn)
