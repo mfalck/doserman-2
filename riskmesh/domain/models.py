@@ -319,6 +319,25 @@ class DriverEffect(Entity):
 
 
 @dataclass
+class Scenario(Entity):
+    """
+    A named "what if the world turns": drivers at other levels ("economic climate
+    1.5"), risks hit harder ({"<risk id>": {"frequency": 3, "impact": 1.5}}),
+    and optionally an outage of a supplier or service for a number of hours.
+    Evaluated against today on the total, the appetite and the objectives.
+    """
+    kind: ClassVar[str] = "scenario"
+    name: str
+    description: Optional[str] = None
+    driver_levels: Dict[str, float] = field(default_factory=dict)          # driver id -> level
+    risk_factors: Dict[str, Dict[str, float]] = field(default_factory=dict)  # risk id -> {"frequency", "impact"}
+    outage_supplier_id: Optional[str] = None
+    outage_service_id: Optional[str] = None
+    outage_hours: Optional[float] = None
+    likelihood: Optional[str] = None             # free text, e.g. "plausible within 5 years"
+
+
+@dataclass
 class Correlation(Entity):
     """
     How strongly two risks tend to have bad years together, from -1 to 1.
@@ -555,7 +574,7 @@ class PeriodFact(Entity):
 
 # Data entities in dependency order (referenced types first)
 DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Objective, Risk, Driver, DriverEffect,
-              Correlation, Appetite, Control,
+              Scenario, Correlation, Appetite, Control,
               RiskEvent, ControlEvent, Incident, Observation, Benchmark)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
@@ -588,6 +607,8 @@ REFERENCES = [
     (Driver, "owner_id", Person, False, "OWNED_BY"),
     (DriverEffect, "driver_id", Driver, False, "DRIVES"),
     (DriverEffect, "risk_id", Risk, False, "DRIVEN"),
+    (Scenario, "outage_supplier_id", Supplier, False, "SCENARIO_OUTAGE"),
+    (Scenario, "outage_service_id", Service, False, "SCENARIO_OUTAGE"),
     (Correlation, "risk_a_id", Risk, False, "CORRELATES"),
     (Correlation, "risk_b_id", Risk, False, "CORRELATES"),
     (Appetite, "business_unit_id", BusinessUnit, False, "APPLIES_TO"),

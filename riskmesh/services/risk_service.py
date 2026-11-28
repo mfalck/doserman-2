@@ -35,6 +35,7 @@ from .excel import ExcelExchange
 from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
 from .incidents import INCIDENT_WRITE_METHODS, Incidents
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
+from .scenarios import SCENARIO_WRITE_METHODS, Scenarios
 from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
@@ -67,7 +68,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
                   Objectives, Decisions, Drivers,
-                  ExcelExchange):
+                  Scenarios, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -423,7 +424,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
         elif not (self._validate_portfolio(e) or self._validate_incident(e) or self._validate_evidence(e)
-                     or self._validate_objective(e) or self._validate_driver(e)):
+                     or self._validate_objective(e) or self._validate_driver(e)
+                     or self._validate_scenario(e)):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -1141,7 +1143,8 @@ WRITE_METHODS = (
 ) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
      + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS
      + EVIDENCE_WRITE_METHODS + OBJECTIVE_WRITE_METHODS
-     + DECISION_WRITE_METHODS + DRIVER_WRITE_METHODS)
+     + DECISION_WRITE_METHODS + DRIVER_WRITE_METHODS
+     + SCENARIO_WRITE_METHODS)
 
 
 def _write(method):

@@ -153,6 +153,18 @@ def seed_demo(svc: RiskService) -> None:
                                  indicator="Unplanned downtime minutes per month at Nordic Cloud")
     svc.create_driver_effect(platform.id, outage.id, frequency_sensitivity=1.0, impact_sensitivity=0.5)
 
+    # Scenarios: what if the world turns? (compared with today on the total, appetite and objectives)
+    svc.create_scenario("Geopolitical crisis", likelihood="plausible within 5 years",
+                        description="State-backed cyber campaigns and a recession at the same time",
+                        driver_levels={economy.id: 1.5, hygiene.id: 1.3},
+                        risk_factors={ransomware.id: {"frequency": 3.0}, breach.id: {"frequency": 2.0}})
+    svc.create_scenario("Data centre down for two days", likelihood="once in 20 years",
+                        description="Power and cooling failure at the data centre behind Nordic Cloud",
+                        outage_supplier_id=datacenter.id, outage_hours=48)
+    svc.create_scenario("Patch programme delivered", likelihood="our plan for 2027",
+                        description="Automated patching and privileged access management in place",
+                        driver_levels={hygiene.id: 0.6})
+
     # Bad years that tend to come together, and what the board accepts
     svc.create_correlation(ransomware.id, breach.id, 0.5,
                            rationale="Same attackers and the same weaknesses in patching and access control")

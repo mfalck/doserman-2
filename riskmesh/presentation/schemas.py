@@ -420,6 +420,28 @@ class WhatIf(_In):
     levels: Dict[str, float] = Field(..., description="driver id -> level to try")
 
 
+class ScenarioIn(_In):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    driver_levels: Optional[Dict[str, float]] = None
+    risk_factors: Optional[Dict[str, Dict[str, float]]] = None
+    outage_supplier_id: Optional[str] = None
+    outage_service_id: Optional[str] = None
+    outage_hours: Optional[float] = Field(None, ge=0)
+    likelihood: Optional[str] = None
+
+
+class ScenarioOut(_Out):
+    name: str
+    description: Optional[str] = None
+    driver_levels: Dict[str, float] = {}
+    risk_factors: Dict[str, Dict[str, float]] = {}
+    outage_supplier_id: Optional[str] = None
+    outage_service_id: Optional[str] = None
+    outage_hours: Optional[float] = None
+    likelihood: Optional[str] = None
+
+
 class ObjectiveCreate(_In):
     name: str
     criticality: ObjectiveCriticality = "IMPORTANT"

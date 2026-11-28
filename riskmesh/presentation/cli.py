@@ -340,6 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
+    scp = sub.add_parser("scenarios", help="named what-if cases compared with today")
+    scp.add_argument("name", nargs="?", help="show one scenario in detail")
     drvp = sub.add_parser("drivers", help="common causes behind risks, and what changing them would do")
     drvp.add_argument("--what-if", nargs="+", metavar="NAME=LEVEL",
                       help='try driver levels, e.g. --what-if "Patch and access hygiene=0.6"')
@@ -590,6 +592,37 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "scenarios":
+        if args.name:
+            sc = next((x for x in svc.list_scenarios() if x.name.lower() == args.name.lower()), None)
+            if not sc:
+                print(f"Error: no scenario called {args.name!r}", file=sys.stderr)
+                return 1
+            r = svc.evaluate_scenario(sc.id)
+            b, a = r["before"], r["after"]
+            print(f"{sc.name}" + (f" ({sc.likelihood})" if sc.likelihood else ""))
+            for d in r["drivers"]:
+                print(f"  driver {d['name']}: {d['from']:g} -> {d['to']:g}")
+            if r["outage"]:
+                o = r["outage"]
+                print(f"  outage of {o['source']} for {o['hours']:g} hours: {money(o['cost']).strip()} "
+                      f"(own {money(o['own_cost']).strip()}, penalties {money(o['penalties']).strip()})")
+            for x in r["risks"]:
+                print(f"  {x['name']:<32}{money(x['before'])} ->{money(x['after'])}")
+            print(f"  total expected loss {money(b['mean']).strip()} -> {money(a['mean']).strip()}, "
+                  f"P99 {money(b['p99']).strip()} -> {money(a['p99']).strip()}")
+            for ob, oa in zip(b["objectives"], a["objectives"]):
+                if ob["breached"] != oa["breached"]:
+                    print(f"  objective '{oa['name']}' {'now outside' if oa['breached'] else 'back within'} tolerance")
+            return 0
+        o = svc.scenario_overview()
+        if o["today"]:
+            print(f"{'Today':<34}{money(o['today']['mean'])}{money(o['today']['p99'])}")
+        for x in o["scenarios"]:
+            change = ", ".join(([f"breaks {len(x['newly_breached'])}"] if x["newly_breached"] else []) +
+                               ([f"fixes {len(x['resolved'])}"] if x["resolved"] else []))
+            print(f"{x['name'][:33]:<34}{money(x['mean'])}{money(x['p99'])}   {change}")
+        print("\nColumns: expected annual loss, P99. Details: riskmesh scenarios \"<name>\"")
     elif args.command == "drivers":
         o = svc.driver_overview()
         print(f"{'Driver':<32}{'Level':>7}{'Drives EAL':>14}{'EAL +-20%':>13}{'P99 +-20%':>13}")

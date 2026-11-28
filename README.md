@@ -272,6 +272,36 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Scenarios: what if the world turns
+
+A **scenario** is a named case such as "geopolitical crisis", "data centre
+down for two days" or "patch programme delivered". It combines:
+
+- `driver_levels`: drivers at other levels (`{"<economy id>": 1.5}`);
+- `risk_factors`: risks hit harder, as multipliers on today's estimate
+  (`{"<ransomware id>": {"frequency": 3, "impact": 1.5}}`);
+- an outage of a supplier or service for `outage_hours`, costed like the stress
+  test (our own cost plus the customers' penalties) and added to the year;
+- `likelihood` as free text ("plausible within 5 years").
+
+`GET /api/scenarios/{id}` compares today with the scenario: per risk, the total
+(expected loss, P90, P99), the appetite and the objectives.
+`GET /api/scenarios/overview` lists them all, sorted by P99, with the
+tolerances each breaks or brings back compared with today. `POST
+/api/scenarios/try` evaluates an unsaved scenario. The figures come from the
+analytic engine, using the levels and multipliers but not the drivers'
+year-to-year variation.
+
+```bash
+riskmesh scenarios
+riskmesh scenarios "Geopolitical crisis"
+```
+
+The web app has a *Scenarios* page and the Excel workbook a *Scenarios* sheet
+(`Economic climate=1.5`, `Ransomware attack: frequency 3, impact 1.5`). The
+desktop application does not have a scenarios page yet: use the web app, the
+command line or Excel.
+
 ## Drivers: the causes behind the risks
 
 A **driver** is a common cause behind several risks: patch and access

@@ -66,7 +66,7 @@ def required_role(method: str, path: str, query: Dict[str, str]) -> str:
         return "admin" if query.get("replace", "false").lower() == "true" else "editor"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "viewer"
-    if path in ("/api/simulations", "/api/simulations/compare", "/api/drivers/what-if") or (
+    if path in ("/api/simulations", "/api/simulations/compare", "/api/drivers/what-if", "/api/scenarios/try") or (
             path.startswith("/api/runs/") and path.endswith("/reproduce")):
         return "viewer"  # running an analysis (or a what-if) does not change risk data
     return "editor"
@@ -680,6 +680,42 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def create_control(body: s.ControlCreate):
         d = body.model_dump()
         return svc.create_control(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
+
+    @api.get("/scenarios/overview", tags=["scenarios"])
+    async def scenario_overview():
+        """Every scenario next to today: total, P99 and which appetites and objectives it breaks."""
+        return svc.scenario_overview()
+
+    @api.post("/scenarios/try", tags=["scenarios"])
+    async def try_scenario(body: s.ScenarioIn):
+        """Evaluates a scenario without saving it."""
+        from ..domain.models import Scenario
+        d = {k: v for k, v in body.model_dump().items() if v is not None}
+        return svc.evaluate_scenario(scenario=Scenario(**{"name": "Unsaved scenario", **d}))
+
+    @api.get("/scenarios", response_model=List[s.ScenarioOut], tags=["scenarios"])
+    async def list_scenarios():
+        return [x.to_dict() for x in svc.list_scenarios()]
+
+    @api.post("/scenarios", response_model=s.ScenarioOut, status_code=201, tags=["scenarios"])
+    async def create_scenario(body: s.ScenarioIn):
+        d = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not d.get("name"):
+            raise HTTPException(422, "name is required")
+        return svc.create_scenario(d.pop("name"), **d).to_dict()
+
+    @api.get("/scenarios/{scenario_id}", tags=["scenarios"])
+    async def evaluate_scenario(scenario_id: str):
+        """Today vs the scenario: per risk, the total, appetite and objectives."""
+        return svc.evaluate_scenario(scenario_id)
+
+    @api.patch("/scenarios/{scenario_id}", response_model=s.ScenarioOut, tags=["scenarios"])
+    async def update_scenario(scenario_id: str, body: s.ScenarioIn):
+        return svc.update_scenario(scenario_id, **_changes(body)).to_dict()
+
+    @api.delete("/scenarios/{scenario_id}", status_code=204, tags=["scenarios"])
+    async def delete_scenario(scenario_id: str):
+        svc.delete_scenario(scenario_id)
 
     @api.get("/drivers/overview", tags=["drivers"])
     async def driver_overview():

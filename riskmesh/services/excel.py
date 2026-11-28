@@ -27,7 +27,7 @@ from ..domain.errors import ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             Benchmark, ControlEvent, Correlation, Driver, DriverEffect, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             Benchmark, ControlEvent, Correlation, Driver, DriverEffect, Scenario, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -154,6 +154,14 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Frequency sensitivity", "frequency_sensitivity", "number", width=11),
         Col("Loss sensitivity", "impact_sensitivity", "number", width=11),
         Col("Rationale", "rationale", width=40)]),
+    ("Scenarios", Scenario, [
+        Col("Name", "name", required=True, width=30), Col("Likelihood", "likelihood", width=20),
+        Col("Driver levels (driver=level; ...)", "driver_levels", "levels", ref=Driver, width=40),
+        Col("Risks hit (risk: frequency x, impact y; ...)", "risk_factors", "factors", ref=Risk, width=48),
+        Col("Outage of supplier", "outage_supplier_id", "ref", ref=Supplier, width=22),
+        Col("Outage of service", "outage_service_id", "ref", ref=Service, width=22),
+        Col("Outage hours", "outage_hours", "number", width=9),
+        Col("Description", "description", width=40)]),
     ("Correlations", Correlation, [
         Col("Risk A", "risk_a_id", "ref", required=True, ref=Risk, width=28),
         Col("Risk B", "risk_b_id", "ref", required=True, ref=Risk, width=28),
@@ -238,6 +246,8 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Scenarios: drivers at other levels ('Economic climate=1.5'), risks hit harder ('Ransomware attack:",
+    "    frequency 3, impact 1.5'; separate several with ';') and/or an outage of a supplier or service.",
     "- Drivers: common causes. Level 1 = as estimated; Bad-year multiplier e.g. 1.5. Driver effects: how",
     "    strongly each risk follows its driver (sensitivity 1 = proportionally, 0.5 weaker, 2 stronger).",
     "- Controls: costs and effect (Fewer events %, Lower loss per event %) value the control (Decisions).",
@@ -450,6 +460,11 @@ class ExcelExchange:
             return json.dumps(v, ensure_ascii=False) if v else None
         if c.kind == "time":
             return v.replace("T", " ") if v else None
+        if c.kind == "levels":
+            return SEP.join(f"{names[c.ref].get(k, k)}={x:g}" for k, x in (v or {}).items()) or None
+        if c.kind == "factors":
+            return SEP.join(f"{names[c.ref].get(k, k)}: " + ", ".join(f"{key} {x:g}" for key, x in f.items())
+                            for k, f in (v or {}).items()) or None
         if c.kind == "points":
             return SEP.join(f"{p['loss']:g} @ {p['probability'] * 100:g}%" for p in v or []) or None
         return v
@@ -649,6 +664,26 @@ class ExcelExchange:
             d[c.field] = _date(raw)
         elif c.kind == "points":
             d[c.field] = _points(raw)
+        elif c.kind == "levels":
+            out = {}
+            for part in _split(raw):
+                name, _, value = part.rpartition("=")
+                if not name or _number(value) is None:
+                    raise ValueError(f"'{part}' should be 'driver=level', e.g. 'Economic climate=1.5'")
+                out[resolve(c.ref, name.strip())] = _number(value)
+            d[c.field] = out
+        elif c.kind == "factors":
+            out = {}
+            for part in _split(raw):
+                name, _, rest = part.partition(":")
+                f = {}
+                for item in rest.split(","):
+                    key, _, value = item.strip().partition(" ")
+                    if key.lower() not in ("frequency", "impact") or _number(value) is None:
+                        raise ValueError(f"'{part}' should be 'risk: frequency 2, impact 1.5'")
+                    f[key.lower()] = _number(value)
+                out[resolve(c.ref, name.strip())] = f
+            d[c.field] = out
         elif c.kind == "percent":
             v = _number(str(raw).replace("%", "") if isinstance(raw, str) else raw)
             d[c.field] = None if v is None else v / 100
