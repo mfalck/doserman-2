@@ -20,7 +20,7 @@ import io
 import json
 import re
 from datetime import date, datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..domain import audit
 from ..domain.errors import ValidationError
@@ -394,6 +394,14 @@ def _split(v: Any, comma: bool = False) -> List[str]:
 
 class ExcelExchange(ServiceCore):
     """Mixin for RiskService."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _affected(self, incident: Incident, g: Dict[str, Any]) -> Dict[str, Any]: ...
+        def _graph(self) -> Dict[str, Any]: ...
+        def customer_profile(self, customer_id: str) -> Dict[str, Any]: ...
+        def export_data(self) -> Dict[str, Any]: ...
+        def import_data(self, data: Dict[str, Any], replace: bool = True) -> Dict[str, int]: ...
+
 
     # -- export ------------------------------------------------------------------------------------
 

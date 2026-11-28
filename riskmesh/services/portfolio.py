@@ -3,17 +3,25 @@ The portfolio view of risk: correlations between risks (bad years that come
 together) and the risk appetite the loss distribution is checked against.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..domain.errors import ConflictError, ValidationError
 from ..domain.models import Appetite, Correlation
 from .core import ServiceCore
+
+if TYPE_CHECKING:  # the assembled service: the areas this module calls
+    from ..domain.models import BusinessUnit
+
 
 MAX_COEFFICIENT = 0.99
 
 
 class Portfolio(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _descendant_ids(self, unit_id: str, units: Optional[List[BusinessUnit]] = None) -> List[str]: ...
+
 
     # -- validation (called from RiskService._validate) --------------------------------
 

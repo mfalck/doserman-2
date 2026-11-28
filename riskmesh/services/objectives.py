@@ -9,7 +9,7 @@ distribution of those risks together; with a tolerance (at most p chance per
 year of losing more than x) the report says whether it is kept.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..domain.errors import ValidationError
 from ..domain.models import OBJECTIVE_CRITICALITIES, Objective
@@ -20,6 +20,15 @@ CHECK_TRIALS = 20_000
 
 class Objectives(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo and ThirdParty._graph)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _graph(self) -> Dict[str, Any]: ...
+        def _service_ids_hit_by_supplier(self, supplier_id: str, g: Dict[str, Any]) -> Dict[str, int]: ...
+        def correlation_pairs(self, risk_ids=None) -> List[Tuple[str, str, float]]: ...
+        def simulation_report(self, n_trials: int = 10_000, seed: Optional[int] = None,
+                              residual: bool = True, unit_id: Optional[str] = None,
+                              engine: str = "analytic") -> Dict[str, Any]: ...
+
 
     def _validate_objective(self, e) -> bool:
         if not isinstance(e, Objective):

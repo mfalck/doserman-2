@@ -23,7 +23,7 @@ implementation of NIS2 and the customers' contracts.
 
 import calendar
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain.errors import ValidationError
 from ..domain.models import INCIDENT_STATUSES, Customer, Incident
@@ -58,6 +58,12 @@ def add_month(t: datetime) -> datetime:
 
 class Incidents(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo and ThirdParty._graph)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _customer_brief(self, c: Customer) -> Dict[str, Any]: ...
+        def _graph(self) -> Dict[str, Any]: ...
+        def _service_ids_hit_by_supplier(self, supplier_id: str, g: Dict[str, Any]) -> Dict[str, int]: ...
+
 
     # -- validation (called from RiskService._validate) --------------------------------
 

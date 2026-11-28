@@ -18,7 +18,7 @@ nothing changes until apply_calibration is called.
 """
 
 from datetime import date
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from ..domain import calibration as cal
 from ..domain.errors import ValidationError
@@ -30,6 +30,14 @@ MAX_POINTS_PER_ROW = 1000
 
 class Evidence(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo/_descendant_ids/update_risk)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        @staticmethod
+        def _chain(supplier_ids, suppliers: Dict[str, Supplier]) -> Dict[str, int]: ...
+        def _descendant_ids(self, unit_id: str, units: Optional[List[BusinessUnit]] = None) -> List[str]: ...
+        def get_risk(self, risk_id: str) -> Risk: ...
+        def update_risk(self, risk_id: str, **changes: Any) -> Risk: ...
+
 
     # -- validation (called from RiskService._validate) --------------------------------
 

@@ -15,7 +15,7 @@ check the columns against the current EBA taxonomy.
 import io
 import re
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain.errors import ValidationError
 from ..domain.models import BusinessUnit, Customer, Incident
@@ -33,6 +33,12 @@ def lei_is_valid(lei: str) -> bool:
 
 class DoraExtract(ServiceCore):
     """Mixin for RiskService (uses ThirdParty._graph/_chain and repo)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _affected(self, incident: Incident, g: Dict[str, Any]) -> Dict[str, Any]: ...
+        def _graph(self) -> Dict[str, Any]: ...
+        def get_customer(self, customer_id: str) -> Customer: ...
+
 
     @staticmethod
     def _lei(entity) -> None:

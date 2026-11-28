@@ -13,7 +13,7 @@ suppliers without an exit plan, and so on.
 
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from ..domain import consequences
 from ..domain.errors import ValidationError
@@ -34,6 +34,16 @@ CONTRACT_WARNING_DAYS = 90
 
 class ThirdParty(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        @staticmethod
+        def _apply_driver_levels(d: Dict[str, Any], links: List[Dict[str, Any]]) -> Dict[str, Any]: ...
+        def _delete_observations_at(self, field: str, value: str) -> None: ...
+        def _driver_links(self, levels: Optional[Dict[str, float]] = None) -> Dict[str, List[Dict[str, Any]]]: ...
+        @staticmethod
+        def _lei(entity) -> None: ...
+        def risk_scores(self, risk: Risk, graph: Optional[Dict[str, Any]] = None) -> Dict[str, Any]: ...
+
 
     # -- validation (called from RiskService._validate) --------------------------------
 

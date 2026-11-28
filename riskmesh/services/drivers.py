@@ -15,7 +15,7 @@ Carlo engine applies it, the analytic engine only the level.
 """
 
 import math
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain import analytic, risk_model
 from ..domain import decisions as dec
@@ -34,6 +34,13 @@ def sigma_of(uncertainty: float) -> float:
 
 class Drivers(ServiceCore):
     """Mixin for RiskService."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _graph(self) -> Dict[str, Any]: ...
+        def appetites_for(self, unit_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+        def engine_risk(self, risk: Risk, g: Optional[Dict[str, Any]] = None) -> Dict[str, Any]: ...
+        def objective_specs(self, risk_ids=None) -> List[Dict[str, Any]]: ...
+
 
     def _validate_driver(self, e) -> bool:
         if isinstance(e, Driver):

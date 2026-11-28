@@ -18,7 +18,7 @@ guidance.
 
 import hashlib
 import math
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
@@ -65,6 +65,10 @@ def per_year(freq: Dict[str, Any], share: float):
 
 class Significance(ServiceCore):
     """Mixin for RiskService (uses engine_risks and the configured thresholds)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def engine_risks(self, risks: List[Risk]) -> Dict[str, Dict[str, Any]]: ...
+
 
     significant_loss: Optional[float] = None
     significant_outage_hours: Optional[float] = None

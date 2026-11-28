@@ -11,7 +11,7 @@ Analytic engine: the levels and factors, not the drivers' year-to-year
 variation.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain import analytic
 from ..domain import decisions as dec
@@ -22,6 +22,17 @@ from .core import ServiceCore
 
 class Scenarios(ServiceCore):
     """Mixin for RiskService (uses Drivers._state_at/_eal and ThirdParty.stress_test)."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _descendant_ids(self, unit_id: str, units: Optional[List[BusinessUnit]] = None) -> List[str]: ...
+        @staticmethod
+        def _eal(r: Dict[str, Any]) -> float: ...
+        def _state_at(self, levels: Optional[Dict[str, float]] = None) -> Dict[str, Dict[str, Any]]: ...
+        def appetites_for(self, unit_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+        def objective_specs(self, risk_ids=None) -> List[Dict[str, Any]]: ...
+        def stress_test(self, hours: float, supplier_id: Optional[str] = None,
+                        service_id: Optional[str] = None) -> Dict[str, Any]: ...
+
 
     def _validate_scenario(self, e) -> bool:
         if not isinstance(e, Scenario):

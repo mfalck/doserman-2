@@ -17,13 +17,17 @@ in both periods and "control effect" is inherent minus residual loss.
 
 from collections import defaultdict
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain import audit
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import BusinessUnit, Control, PeriodFact, ReportingPeriod, RiskEvent
 from ..domain.periods import parse_period
 from .core import ServiceCore
+
+if TYPE_CHECKING:  # the assembled service: the areas this module calls
+    from ..domain.models import AuditAnchor
+
 
 FACT_METRICS = ("risk_count", "high_risk_count", "eal_inherent", "eal_residual", "p50", "p90", "p99", "tvar99",
                 "p99_inherent", "score_inherent", "score_residual", "controls", "control_effectiveness",
@@ -43,6 +47,18 @@ def _avg(values: List[float]) -> Optional[float]:
 
 
 class Reporting(ServiceCore):
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _descendant_ids(self, unit_id: str, units: Optional[List[BusinessUnit]] = None) -> List[str]: ...
+        anchor_on_period_close: bool
+        def anchoring_enabled(self) -> bool: ...
+        def control_effectiveness(self) -> Optional[float]: ...
+        def create_anchor(self, reason: Optional[str] = None) -> AuditAnchor: ...
+        def list_risk_views(self, **filters: Any) -> List[Dict[str, Any]]: ...
+        def run_analysis(self, mode: str = "compare", engine: str = "analytic", n_trials: int = 10_000,
+                         seed: Optional[int] = 42, residual: bool = True, unit_id: Optional[str] = None,
+                         use_cache: bool = True, label: Optional[str] = None) -> Dict[str, Any]: ...
+
 
     # -- periods -------------------------------------------------------------------
 

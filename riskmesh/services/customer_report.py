@@ -18,17 +18,36 @@ check later that the copy they hold is the one we issued.
 
 import html
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain import audit
 from ..domain.models import Incident
 from .core import ServiceCore
+
+if TYPE_CHECKING:  # the assembled service: the areas this module calls
+    from ..domain.models import BusinessUnit, ControlEvent, ReportingPeriod
+
 
 REPORT_VERSION = "1"
 
 
 class CustomerReport(ServiceCore):
     """Mixin for RiskService."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _graph(self) -> Dict[str, Any]: ...
+        def customer_profile(self, customer_id: str) -> Dict[str, Any]: ...
+        def dora_extract(self, customer_id: str) -> Dict[str, Any]: ...
+        def incident_deadlines(self, incident_id: str, now: Optional[datetime] = None,
+                               g: Optional[Dict[str, Any]] = None) -> Dict[str, Any]: ...
+        def latest_control_tests(self) -> Dict[str, ControlEvent]: ...
+        def list_periods(self) -> List[ReportingPeriod]: ...
+        def objective_overview(self, residual: bool = True) -> Dict[str, Any]: ...
+        def our_entity(self) -> Optional[BusinessUnit]: ...
+        def simulation_report(self, n_trials: int = 10_000, seed: Optional[int] = None,
+                              residual: bool = True, unit_id: Optional[str] = None,
+                              engine: str = "analytic") -> Dict[str, Any]: ...
+
 
     def customer_report(self, customer_id: str) -> Dict[str, Any]:
         profile = self.customer_profile(customer_id)

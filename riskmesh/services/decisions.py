@@ -16,7 +16,7 @@ figures come from the exact analytic engine, which treats risks as
 independent.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ..domain import analytic, risk_model
 from ..domain import decisions as dec
@@ -41,6 +41,15 @@ def _total_p99(risks: Dict[str, Dict[str, Any]]) -> float:
 
 class Decisions(ServiceCore):
     """Mixin for RiskService."""
+
+    if TYPE_CHECKING:  # members of other service areas this one uses
+        def _state_at(self, levels: Optional[Dict[str, float]] = None) -> Dict[str, Dict[str, Any]]: ...
+        def appetites_for(self, unit_id: Optional[str] = None) -> List[Dict[str, Any]]: ...
+        def objective_specs(self, risk_ids=None) -> List[Dict[str, Any]]: ...
+        def update_control(self, control_id: str, **changes: Any) -> Control: ...
+        def update_driver(self, driver_id: str, **changes: Any) -> Driver: ...
+        def update_risk(self, risk_id: str, **changes: Any) -> Risk: ...
+
 
     def _validate_control_economics(self, c: Control) -> None:
         for f in ("implementation_cost", "annual_cost"):
