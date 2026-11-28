@@ -571,6 +571,7 @@ class CalibrationApply(_In):
     impact: bool = True
     expert_years: float = Field(2.0, gt=0)
     expert_events: float = Field(5.0, gt=0)
+    uncertain: bool = False
 
 
 class CorrelationCreate(_In):
@@ -685,6 +686,7 @@ class CustomerCreate(_In):
     penalty_per_hour: Optional[float] = Field(None, ge=0)
     penalty_grace_hours: Optional[float] = Field(None, ge=0)
     penalty_cap: Optional[float] = Field(None, ge=0)
+    own_loss_per_outage_hour: Optional[float] = Field(None, ge=0)
 
 
 class CustomerUpdate(_In):
@@ -704,6 +706,7 @@ class CustomerUpdate(_In):
     penalty_per_hour: Optional[float] = Field(None, ge=0)
     penalty_grace_hours: Optional[float] = Field(None, ge=0)
     penalty_cap: Optional[float] = Field(None, ge=0)
+    own_loss_per_outage_hour: Optional[float] = Field(None, ge=0)
 
 
 class CustomerOut(_Out):
@@ -723,6 +726,7 @@ class CustomerOut(_Out):
     penalty_per_hour: Optional[float] = None
     penalty_grace_hours: Optional[float] = None
     penalty_cap: Optional[float] = None
+    own_loss_per_outage_hour: Optional[float] = None
 
 
 # -- Events -----------------------------------------------------------------

@@ -58,6 +58,7 @@ from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
 from .reporting import REPORTING_WRITE_METHODS, Reporting
 from .scenarios import SCENARIO_WRITE_METHODS, Scenarios
+from .significance import Significance
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
 
@@ -89,7 +90,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
                   Objectives, Decisions, Drivers,
-                  Scenarios, CustomerReport, ExcelExchange):
+                  Scenarios, CustomerReport, Significance, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -424,6 +425,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             e.evidence_categories = list(dict.fromkeys(str(c).strip() for c in e.evidence_categories or []
                                                        if str(c).strip()))
             try:
+                e.frequency = risk_model.normalise_frequency(e.frequency)
+                e.residual_frequency = risk_model.normalise_frequency(e.residual_frequency)
                 risk_model.validate_frequency(e.frequency)
                 risk_model.build_impact_distribution(e.impact)
                 if e.residual_frequency:
@@ -768,16 +771,65 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
     # Quantification
     # =====================================================================
 
+    # -- scope: the whole organisation, a unit (with its children), or one customer ---------------------
+
+    @staticmethod
+    def _customer_scope(scope: Optional[str]):
+        """("customer"|"customer-own", customer id) for a customer scope, else None."""
+        if scope and scope.startswith(("customer:", "customer-own:")):
+            kind, _, cid = scope.partition(":")
+            return kind, cid
+        return None
+
+    def _scoped_risks(self, scope: Optional[str]) -> List[Risk]:
+        """
+        The risks a report covers. scope is a business unit id (with its children), or
+        "customer:<id>" / "customer-own:<id>": the risks that can hit the customer's services,
+        directly or through the suppliers behind them.
+        """
+        cs = self._customer_scope(scope)
+        if cs:
+            ids = {r["id"] for r in self.customer_profile(cs[1])["risks"]}
+            return [r for r in self.repo.list(Risk) if r.id in ids]
+        return self.list_risks(scope, include_children=True) if scope else self.repo.list(Risk)
+
+    def _scoped_engine(self, risks: List[Risk], scope: Optional[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        The engine view of the risks. For "customer-own:<id>" each risk becomes the customer's own
+        loss: its outage hours times the customer's loss per outage hour (risks that take nothing
+        down cost the customer nothing measurable here and are left out).
+        """
+        engine = self.engine_risks(risks)
+        cs = self._customer_scope(scope)
+        if not cs or cs[0] != "customer-own":
+            return engine
+        c = self.get_customer(cs[1])
+        if not c.own_loss_per_outage_hour:
+            raise ValidationError(f"Set {c.name}'s own loss per outage hour to see the customer's perspective.")
+        term = {"key": f"customer-own:{c.id}", "kind": "customer", "id": c.id, "name": f"{c.name} (own loss)",
+                "per_hour": c.own_loss_per_outage_hour, "grace": 0.0, "cap": None}
+        out = {}
+        for rid, d in engine.items():
+            if not (d.get("outage_hours") or d.get("residual_outage_hours")):
+                continue
+            zero = {"dist": "fixed", "value": 0}
+            out[rid] = {**d, "impact": zero, "residual_impact": zero if d.get("residual_impact") else None,
+                        "consequences": {"terms": [term]}}
+        if not out:
+            raise ValidationError(f"None of the risks to {c.name}'s services has an outage duration, so the "
+                                  "customer's own loss cannot be estimated.")
+        return out
+
     def simulate(self, n_trials: int = 10_000, seed: Optional[int] = None,
                  residual: bool = True, unit_id: Optional[str] = None) -> risk_model.SimulationResult:
         """Monte Carlo simulation of all risks (or those under unit_id)."""
         if not 100 <= n_trials <= 1_000_000:
             raise ValidationError("n_trials must be between 100 and 1,000,000.")
-        risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+        risks = self._scoped_risks(unit_id)
         if not risks:
             raise ValidationError("There are no risks to simulate.")
         units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
-        return risk_model.run_simulation(self.engine_risks(risks), units, n_trials=n_trials, seed=seed,
+        return risk_model.run_simulation(self._scoped_engine(risks, unit_id), units, n_trials=n_trials, seed=seed,
                                          residual=residual,
                                          correlations=self.correlation_pairs([r.id for r in risks]))
 
@@ -792,12 +844,12 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         risks are correlated.
         """
         if engine == "analytic":
-            risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+            risks = self._scoped_risks(unit_id)
             if not risks:
                 raise ValidationError("There are no risks to analyse.")
             units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
             try:
-                report = analytic.analyse(self.engine_risks(risks), units, residual=residual,
+                report = analytic.analyse(self._scoped_engine(risks, unit_id), units, residual=residual,
                                           appetites=self.appetites_for(unit_id),
                                           correlated=len(self.correlation_pairs([r.id for r in risks])),
                                           objectives=self.objective_specs([r.id for r in risks]))
@@ -810,7 +862,15 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         else:
             raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
         report["residual"] = residual
-        risks_ = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+        cs = self._customer_scope(unit_id)
+        if cs:
+            c = self.get_customer(cs[1])
+            scoped = self._scoped_risks(unit_id)
+            included = {r["id"] for r in report["risks"]}
+            report["scope"] = {"customer_id": c.id, "customer": c.name,
+                               "perspective": "customer" if cs[0] == "customer-own" else "ours",
+                               "left_out": [r.name for r in scoped if r.id not in included]}
+        risks_ = self._scoped_risks(unit_id)
         driven = {link["id"] for links in self._driver_links().values() for link in links}
         if driven and risks_:
             report["drivers"] = {"count": len(driven), "variation_applied": engine == "monte_carlo",
@@ -836,10 +896,11 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
 
     def _analysis_inputs(self, unit_id: Optional[str]) -> Dict[str, Any]:
         """Exactly the data a report depends on (and nothing else)."""
-        risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+        risks = self._scoped_risks(unit_id)
         fields = ("id", "name", "business_unit_id", "frequency", "impact", "residual_frequency", "residual_impact")
         shock = ("outage_hours", "residual_outage_hours", "consequences", "drivers")
-        engine = self.engine_risks(risks)
+        engine = self._scoped_engine(risks, unit_id)
+        risks = [r for r in risks if r.id in engine]
         # outage fields only when used, so the fingerprints of runs made before they existed stay valid
         rows = [{**{f: getattr(r, f) for f in fields}, **{f: engine[r.id][f] for f in shock if engine[r.id].get(f)}}
                 for r in risks]

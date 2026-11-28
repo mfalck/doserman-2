@@ -615,6 +615,15 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def get_customer(customer_id: str):
         return svc.get_customer(customer_id).to_dict()
 
+    @api.get("/customers/{customer_id}/export.xlsx", tags=["third parties"])
+    async def customer_workbook(customer_id: str):
+        """The Excel workbook with only this customer's part (e.g. to start a separate analysis)."""
+        name = svc.get_customer(customer_id).name
+        safe = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-") or "customer"
+        return Response(svc.export_excel(customer_id),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="riskmesh-{safe}.xlsx"'})
+
     @api.get("/customers/{customer_id}/report", tags=["third parties"])
     async def customer_report(customer_id: str):
         """The customer's assurance report as data (with a SHA-256 fingerprint of its content)."""
@@ -695,6 +704,11 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         return [{"key": "quantitative", "label": "Quantitative (frequency and loss distributions)",
                  "version": "1", "description": "Enter the distributions directly.", "fields": []}] + \
             [x.describe() for x in m_.all_methods()]
+
+    @api.get("/significance", tags=["analysis"])
+    async def significance(residual: bool = True, loss: Optional[float] = None, hours: Optional[float] = None):
+        """NIS2: expected significant incidents per year (a single incident above the threshold), per risk."""
+        return svc.significance_report(residual, loss, hours)
 
     @api.get("/scenarios/overview", tags=["scenarios"])
     async def scenario_overview():

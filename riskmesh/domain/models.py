@@ -196,6 +196,8 @@ class Customer(Entity):
     penalty_per_hour: Optional[float] = None
     penalty_grace_hours: Optional[float] = None
     penalty_cap: Optional[float] = None          # per event
+    # what an outage costs the customer itself per hour (for the customer's own perspective)
+    own_loss_per_outage_hour: Optional[float] = None
 
 
 @dataclass

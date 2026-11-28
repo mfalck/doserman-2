@@ -24,4 +24,6 @@ def make_service(settings: Settings, actor: Optional[str] = None, source: str = 
     svc.anchor_key_path = settings.audit_signing_key
     svc.tsa_url = settings.audit_tsa_url
     svc.anchor_on_period_close = settings.anchor_on_period_close
+    svc.significant_loss = settings.significant_loss
+    svc.significant_outage_hours = settings.significant_outage_hours
     return svc

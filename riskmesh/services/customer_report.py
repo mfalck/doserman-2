@@ -68,6 +68,14 @@ class CustomerReport:
                               "resolved_at": inc.resolved_at, "root_cause": inc.root_cause,
                               "notify_by": mine["due"], "notified_at": mine["sent_at"], "notification": mine["status"]})
 
+        analysis = {}
+        for key, scope in (("ours", f"customer:{c['id']}"), ("customer", f"customer-own:{c['id']}")):
+            try:
+                t = self.simulation_report(unit_id=scope)["total"]
+                analysis[key] = {k: t[k] for k in ("mean", "p50", "p80", "p90", "p99")}
+            except Exception:  # no risks, or no own loss per hour set
+                analysis[key] = None
+
         dora = self.dora_extract(customer_id) if "DORA" in c["regulations"] else None
         gaps = list(dora["gaps"]) if dora else []
         gaps += [f["name"] + ": " + f["finding"] for f in profile["findings"]]
@@ -95,6 +103,7 @@ class CustomerReport:
                           "last_result": (tests[x["id"]].status if x["id"] in tests else None)}
                          for x in profile["controls"] if set(x["risk_ids"]) & risk_ids],
             "penalty_exposure": exposure,
+            "analysis": analysis,
             "objectives": objectives,
             "incidents": incidents,
             "open_points": gaps,
@@ -145,6 +154,19 @@ class CustomerReport:
                 [[x["name"], x["type"].title(), x["status"].replace("_", " ").title(), x["last_test"] or "–",
                   (x["last_result"] or "–").title()] for x in r["controls"]]),
         ]
+        a = r.get("analysis") or {}
+        if a.get("ours") or a.get("customer"):
+            rows = []
+            if a.get("customer"):
+                x = a["customer"]
+                rows.append(["Your loss from outages of our services", money(x["mean"]), money(x["p50"]),
+                             money(x["p80"]), money(x["p99"])])
+            if a.get("ours"):
+                x = a["ours"]
+                rows.append(["Our loss from the risks to your services", money(x["mean"]), money(x["p50"]),
+                             money(x["p80"]), money(x["p99"])])
+            sections.append("<h2>Annual loss (with controls)</h2>" + table(
+                ["", "Expected", "Typical year (P50)", "Bad year (P80)", "1 in 100 (P99)"], rows))
         if r["penalty_exposure"]:
             x = r["penalty_exposure"]
             sections.append("<h2>Outage penalties to you (our exposure)</h2>"

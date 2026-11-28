@@ -46,7 +46,7 @@ from .risk_model import (
 SEVERITY_EPS = 1e-6       # severity tail beyond this quantile is collapsed onto it
 COUNT_EPS = 1e-9          # P(more events than the grid allows for)
 DEFAULT_POINTS = 2 ** 19  # grid size for units / total (524,288 points)
-ENGINE_VERSION = "analytic-1"  # bump when results change, so stored runs are not reused
+ENGINE_VERSION = "analytic-2"  # bump when results change, so stored runs are not reused
 RISK_POINTS = 2 ** 18     # grid size for a single risk
 
 
@@ -66,6 +66,9 @@ def _upper_bound(freq: Dict[str, Any], impact) -> float:
         x_cap = float(impact["value"]) if dist is None else float(dist.ppf(1 - SEVERITY_EPS))
     if freq["type"] == "poisson":
         n_cap = max(1.0, float(stats.poisson.ppf(1 - COUNT_EPS, float(freq["rate"]))))
+    elif freq["type"] == "negbin":
+        k = float(freq["shape"])
+        n_cap = max(1.0, float(stats.nbinom.ppf(1 - COUNT_EPS, k, k / (k + float(freq["rate"])))))
     else:
         n_cap = 1.0
     bound = n_cap * max(x_cap, 0.0)
@@ -97,12 +100,21 @@ def _transform(freq: Dict[str, Any], impact: Dict[str, Any], h: float, n: int) -
     phi_x = np.fft.rfft(_severity_pmf(impact, h, n))
     if freq["type"] == "poisson":
         return np.exp(float(freq["rate"]) * (phi_x - 1.0))
+    if freq["type"] == "negbin":  # probability generating function (p / (1 - (1-p) z))^k at z = phi_x
+        k = float(freq["shape"])
+        p = k / (k + float(freq["rate"]))
+        return (p / (1.0 - (1.0 - p) * phi_x)) ** k
     p = float(freq["p"])
     return 1.0 - p + p * phi_x
 
 
 def _prob_no_event(freq: Dict[str, Any]) -> float:
-    return float(np.exp(-float(freq["rate"]))) if freq["type"] == "poisson" else 1.0 - float(freq["p"])
+    if freq["type"] == "poisson":
+        return float(np.exp(-float(freq["rate"])))
+    if freq["type"] == "negbin":
+        k = float(freq["shape"])
+        return float((k / (k + float(freq["rate"]))) ** k)
+    return 1.0 - float(freq["p"])
 
 
 class LossDistribution:

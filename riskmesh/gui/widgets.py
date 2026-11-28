@@ -60,6 +60,9 @@ def score_level(score: float) -> str:
 def describe_frequency(f: Optional[Dict[str, Any]]) -> str:
     if not f:
         return "–"
+    if f["type"] == "negbin":
+        from ..domain.risk_model import rate_p90_of
+        return f"{f['rate']:g} / year (up to {rate_p90_of(f):.2g})"
     return f"{f['rate']:g} / year" if f["type"] == "poisson" else f"{f['p'] * 100:g}% chance"
 
 
@@ -253,11 +256,16 @@ class FrequencyEditor(QWidget):
         self.changed.emit()
 
     def set_spec(self, spec: Dict[str, Any]) -> None:
-        self.kind.setCurrentIndex(0 if spec["type"] == "poisson" else 1)
-        self.value.setValue(spec["rate"] if spec["type"] == "poisson" else spec["p"] * 100)
+        # a negative binomial is shown as its mean rate; its uncertainty (shape) is kept on save
+        self._shape = spec.get("shape") if spec["type"] == "negbin" else None
+        repeats = spec["type"] in ("poisson", "negbin")
+        self.kind.setCurrentIndex(0 if repeats else 1)
+        self.value.setValue(spec["rate"] if repeats else spec["p"] * 100)
 
     def spec(self) -> Dict[str, Any]:
         if self.kind.currentData() == "poisson":
+            if getattr(self, "_shape", None):
+                return {"type": "negbin", "rate": self.value.value(), "shape": self._shape}
             return {"type": "poisson", "rate": self.value.value()}
         return {"type": "bernoulli", "p": self.value.value() / 100}
 

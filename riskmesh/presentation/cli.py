@@ -40,7 +40,8 @@ def print_report(report: Dict[str, Any], title: str) -> None:
         method = f"Monte Carlo, {report['n_trials']:,} simulated years"
     print(f"\n=== {title} ({method}) ===")
     print(f"Expected annual loss : {money(t['mean'])}")
-    print(f"Median (P50)         : {money(t['p50'])}")
+    print(f"Typical year (P50)   : {money(t['p50'])}")
+    print(f"Bad year (P80)       : {money(t['p80'])}" if "p80" in t else "")
     print(f"P90                  : {money(t['p90'])}")
     print(f"VaR 99 (P99)         : {money(t['p99'])}")
     print(f"TVaR 99              : {money(t['tvar99'])}")
@@ -113,9 +114,16 @@ def _user_by_name(svc: RiskService, username: str):
 def _excel(args, svc: RiskService) -> int:
     import hashlib
     if args.excel_command == "export":
+        customer_id = None
+        if getattr(args, "customer", None):
+            cust = _find(svc.list_customers(), args.customer)
+            if not cust:
+                print(f"Error: no customer called {args.customer!r}", file=sys.stderr)
+                return 1
+            customer_id = cust.id
         with open(args.file, "wb") as f:
-            f.write(svc.export_excel())
-        print(f"Workbook written to {args.file}")
+            f.write(svc.export_excel(customer_id))
+        print(f"Workbook written to {args.file}" + (" (only that customer's part)" if customer_id else ""))
         return 0
     with open(args.file, "rb") as f:
         content = f.read()
@@ -324,7 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     xl = sub.add_parser("excel", help="download or upload all data as an Excel workbook")
     xl_sub = xl.add_subparsers(dest="excel_command", required=True)
-    xl_sub.add_parser("export", help="write all data (or an empty template) to a workbook").add_argument("file")
+    xle = xl_sub.add_parser("export", help="write all data (or an empty template) to a workbook")
+    xle.add_argument("file")
+    xle.add_argument("--customer", help="only this customer's part")
     xli = xl_sub.add_parser("import", help="read a workbook; shows what changes and asks first")
     xli.add_argument("file")
     xli.add_argument("--replace", action="store_true", help="delete stored rows that are missing from a sheet")
@@ -350,6 +360,9 @@ def build_parser() -> argparse.ArgumentParser:
     tps.add_argument("hours", type=float)
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
+    sigp = sub.add_parser("significance", help="NIS2: how often a single incident would be significant")
+    sigp.add_argument("--loss", type=float, help="threshold per incident (default: from the configuration)")
+    sigp.add_argument("--hours", type=float, help="also count outages longer than this")
     sub.add_parser("methods", help="the assessment methods available (ISO 27005, FAIR, plugins) and their inputs")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
@@ -372,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("--trials", type=int, help="Monte Carlo only (default: from config)")
     sim.add_argument("--seed", type=int, help="Monte Carlo only (default: from config)")
     sim.add_argument("--inherent", action="store_true", help="ignore controls (residual specs)")
+    sim.add_argument("--customer", help="only the risks to this customer's services")
+    sim.add_argument("--their-loss", action="store_true", help="with --customer: the customer's own loss")
     sim.add_argument("--compare", action="store_true", help="show inherent and residual")
     sim.add_argument("--json", metavar="FILE", help="also write the full report to FILE")
     sim.add_argument("--label", help="name the run, e.g. 'Board meeting 2026-12-01'")
@@ -553,8 +568,17 @@ def run(args, svc: RiskService) -> int:
                   f"{(r.category or '')[:12]:<13}{eal:>15,.0f}")
 
     elif args.command == "simulate":
+        scope = None
+        if args.customer:
+            cust = _find(svc.list_customers(), args.customer)
+            if not cust:
+                print(f"Error: no customer called {args.customer!r}", file=sys.stderr)
+                return 1
+            scope = f"{'customer-own' if args.their_loss else 'customer'}:{cust.id}"
+            print(f"Scope: {cust.name} - " + ("the customer's own loss" if args.their_loss
+                                             else "our loss from the risks to its services"))
         if args.compare:
-            result = svc.run_analysis("compare", args.engine, args.trials, args.seed, unit_id=None,
+            result = svc.run_analysis("compare", args.engine, args.trials, args.seed, unit_id=scope,
                                       use_cache=not args.no_cache, label=args.label)
             print_report(result["inherent"], "Inherent risk")
             print_report(result["residual"], "Residual risk (after controls)")
@@ -562,7 +586,7 @@ def run(args, svc: RiskService) -> int:
                   f" and P99 by {result['reduction_in_p99']:,.0f}")
         else:
             result = svc.run_analysis("single", args.engine, args.trials, args.seed, residual=not args.inherent,
-                                      use_cache=not args.no_cache, label=args.label)
+                                      unit_id=scope, use_cache=not args.no_cache, label=args.label)
             print_report(result, "Inherent risk" if args.inherent else "Residual risk")
         run = result["run"]
         print(f"\nRun #{run['number']} ({'stored result reused' if run['cached'] else 'calculated now'}), "
@@ -738,6 +762,22 @@ def run(args, svc: RiskService) -> int:
         if args.apply:
             svc.apply_calibration(risk.id, expert_years=args.expert_years)
             print("Applied (recorded in the audit log).")
+    elif args.command == "significance":
+        r = svc.significance_report(loss=args.loss, hours=args.hours)
+        t = r["threshold"]
+        if t["loss"] is None and t["outage_hours"] is None:
+            print("No threshold set: add [nis2] significant_loss to the configuration or use --loss.")
+            return 1
+        print("Significant incident: loss above " + (money(t["loss"]).strip() if t["loss"] is not None else "-")
+              + (f" or outage above {t['outage_hours']:g} h" if t["outage_hours"] is not None else ""))
+        print(f"\n{'Risk':<32}{'Share of events':>16}{'Per year':>10}{'P(>=1)':>9}")
+        for x in r["risks"]:
+            print(f"{x['name'][:31]:<32}{x['share_of_events']:>16.1%}{x['expected_per_year']:>10.3f}"
+                  f"{x['prob_at_least_one']:>9.1%}")
+        tot = r["total"]
+        once = f", about once in {tot['once_in_years']:.0f} years" if tot["once_in_years"] else ""
+        print(f"\nExpected {tot['expected_per_year']:.3f} significant incidents a year{once}; "
+              f"{tot['prob_at_least_one']:.1%} chance of at least one.")
     elif args.command == "methods":
         from ..domain import methods as m_
         print("quantitative  Frequency and loss distributions, entered directly")

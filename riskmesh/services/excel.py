@@ -60,6 +60,7 @@ from ..domain.models import (
     Supplier,
     new_id,
 )
+from ..domain.risk_model import negbin_from_range, rate_p90_of
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -146,6 +147,7 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Penalty per hour", "penalty_per_hour", "number", width=12),
         Col("Penalty after hours", "penalty_grace_hours", "number", width=10),
         Col("Penalty cap", "penalty_cap", "number", width=12),
+        Col("Their own loss per outage hour", "own_loss_per_outage_hour", "number", width=14),
         Col("Notes", "notes", width=40)]),
     ("Objectives", Objective, [
         Col("Name", "name", required=True, width=34),
@@ -162,9 +164,11 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Organisation", "business_unit_id", "ref", required=True, ref=BusinessUnit, width=22),
         Col("Category", "category", width=12), Col("Owner", "owner_id", "ref", ref=Person, width=20),
         Col("Events per year", "frequency", "freq_rate", width=10),
+        Col("Events per year, high (P90)", "frequency", "freq_high", width=10),
         Col("Chance per year %", "frequency", "freq_p", width=10),
         *_spec_cols("Loss", "impact"),
         Col("Residual events per year", "residual_frequency", "freq_rate", width=10),
+        Col("Residual events per year, high (P90)", "residual_frequency", "freq_high", width=10),
         Col("Residual chance per year %", "residual_frequency", "freq_p", width=10),
         *_spec_cols("Residual loss", "residual_impact"),
         *_spec_cols("Outage hours", "outage_hours"),
@@ -277,6 +281,7 @@ README = [
     "- Lists (Delegates, Suppliers, Services, ...) are separated by ';'.",
     "- Yes/no columns: yes or no.  Dates: YYYY-MM-DD.",
     "- Frequency: fill either 'Events per year' (can repeat) or 'Chance per year %' (at most once).",
+    "    'Events per year, high (P90)' makes the rate itself uncertain (e.g. typically 2, up to 4).",
     "- A distribution is a model (lognormal, pert, triangular, uniform, fixed) and its numbers:",
     "    lognormal: low P10 and high P90 (80% of events between them); pert/triangular: min, most likely, max;",
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
@@ -391,7 +396,38 @@ class ExcelExchange:
 
     # -- export ------------------------------------------------------------------------------------
 
-    def export_excel(self) -> bytes:
+    def _customer_part(self, customer_id: str) -> Dict[type, set]:
+        """The ids of everything that belongs to one customer's part of the graph."""
+        p = self.customer_profile(customer_id)
+        services = {s["id"] for s in p["services"]}
+        suppliers = {s["id"] for s in p["suppliers"]}
+        risks = {r["id"] for r in p["risks"]}
+        controls = {c["id"] for c in p["controls"]}
+        g = self._graph()
+        incidents = {i.id for i in self.repo.list(Incident)
+                     if customer_id in {c.id for c in self._affected(i, g)["customers"].values()}}
+        return {
+            Customer: {customer_id}, Service: services, Supplier: suppliers, Risk: risks, Control: controls,
+            Incident: incidents,
+            RiskEvent: {e.id for e in self.repo.list(RiskEvent) if e.risk_id in risks},
+            ControlEvent: {e.id for e in self.repo.list(ControlEvent) if e.control_id in controls},
+            Objective: {o.id for o in self.repo.list(Objective) if set(o.service_ids) & services},
+            DriverEffect: {e.id for e in self.repo.list(DriverEffect) if e.risk_id in risks},
+            Driver: {e.driver_id for e in self.repo.list(DriverEffect) if e.risk_id in risks},
+            Correlation: {c.id for c in self.repo.list(Correlation) if c.risk_a_id in risks and c.risk_b_id in risks},
+            Observation: {o.id for o in self.repo.list(Observation)
+                          if o.risk_id in risks or (o.supplier_id in suppliers)},
+            Asset: {a for s in self.repo.list(Service) if s.id in services for a in s.asset_ids}
+            | {a for r in self.repo.list(Risk) if r.id in risks for a in r.asset_ids},
+            Appetite: set(), Scenario: set(),
+        }
+
+    def export_excel(self, customer_id: Optional[str] = None) -> bytes:
+        """
+        All data as a workbook; with customer_id only that customer's part (its services, the
+        suppliers behind them, the risks to them and what belongs to those), plus the people,
+        organisation units and benchmarks the rows refer to.
+        """
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
@@ -399,6 +435,9 @@ class ExcelExchange:
 
         data = {cls: sorted(self.repo.list(cls), key=lambda e: (getattr(e, "name", "") or "", e.id))
                 for cls in DATA_TYPES}
+        if customer_id:
+            keep = self._customer_part(customer_id)
+            data = {cls: [e for e in items if cls not in keep or e.id in keep[cls]] for cls, items in data.items()}
         names = self._names(data)
 
         wb = Workbook()
@@ -475,13 +514,16 @@ class ExcelExchange:
         if c.kind == "ref":
             return names[c.ref].get(v, v) if v else None
         if c.kind == "refs":
-            return SEP.join(names[c.ref].get(x, x) for x in v) or None
+            # only rows that are in the workbook (a customer's part leaves the rest out)
+            return SEP.join(names[c.ref][x] for x in v if x in names[c.ref]) or None
         if c.kind == "list":
             return SEP.join(v) or None
         if c.kind == "bool":
             return "yes" if v else "no"
         if c.kind == "freq_rate":
-            return v["rate"] if v and v.get("type") == "poisson" else None
+            return v["rate"] if v and v.get("type") in ("poisson", "negbin") else None
+        if c.kind == "freq_high":
+            return round(rate_p90_of(v), 4) if v and v.get("type") == "negbin" else None
         if c.kind == "freq_p":
             return round(float(v["p"]) * 100, 6) if v and v.get("type") == "bernoulli" else None
         if c.kind == "spec_model":
@@ -644,6 +686,11 @@ class ExcelExchange:
     @staticmethod
     def _read_cell(d: Dict[str, Any], specs: Dict[str, Dict[str, Any]], c: Col, raw: Any,
                    resolve: Callable[[type, str], str]) -> None:
+        if c.kind == "freq_high":
+            v = _number(raw)
+            if v is not None:
+                specs.setdefault(c.field, {})["_high"] = v
+            return
         if c.kind in ("freq_rate", "freq_p"):
             v = _number(raw)
             spec = specs.setdefault(c.field, {})
@@ -745,7 +792,14 @@ class ExcelExchange:
 
     @staticmethod
     def _finish_spec(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        high = spec.pop("_high", None)
         if spec.pop("_freq", False):
+            if high is not None:
+                if spec.get("type") != "poisson":
+                    raise ValueError("the high estimate needs 'events per year'")
+                if high < spec["rate"]:
+                    raise ValueError("the high estimate is below the events per year")
+                return negbin_from_range(spec["rate"], high)
             return spec or None
         model = spec.pop("_model", None)
         if not model:

@@ -32,7 +32,7 @@ Z90 = stats.norm.ppf(0.9)   # 1.2816: P10/P90 are mu -/+ Z90 * sigma
 
 def rate_of(freq: Dict[str, Any]) -> float:
     """Expected events per year of a frequency spec (Bernoulli p -> the rate with the same P(no event))."""
-    if freq["type"] == "poisson":
+    if freq["type"] in ("poisson", "negbin"):
         return float(freq["rate"])
     p = min(float(freq["p"]), 0.999999)
     return -math.log(1.0 - p)
@@ -42,6 +42,8 @@ def spec_like(freq: Dict[str, Any], rate: float) -> Dict[str, Any]:
     """A frequency spec of the same type as `freq` with this rate."""
     if freq["type"] == "poisson":
         return {"type": "poisson", "rate": round(rate, 6)}
+    if freq["type"] == "negbin":
+        return {"type": "negbin", "rate": round(rate, 6), "shape": freq["shape"]}
     return {"type": "bernoulli", "p": round(1.0 - math.exp(-rate), 6)}
 
 
@@ -60,6 +62,9 @@ def calibrate_frequency(freq: Dict[str, Any], events: int, years: float,
         "weights": {"expert_years": expert_years, "benchmark_years": sum(w for _, w in benchmarks),
                     "data_years": years},
         "suggested": spec_like(freq, rate),
+        # the posterior predictive: a Poisson whose rate has the remaining uncertainty Gamma(alpha, beta)
+        "suggested_uncertain": ({"type": "negbin", "rate": round(rate, 6), "shape": round(alpha, 6)}
+                                if alpha > 0 else None),
         "change": rate / rate0 - 1 if rate0 > 0 else None,
     }
 

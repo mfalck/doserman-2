@@ -113,6 +113,8 @@ class Portfolio:
         for a report on one unit, those for that unit or a unit below it.
         """
         apps = sorted(self.repo.list(Appetite), key=lambda a: a.id)
+        if unit_id and unit_id.startswith(("customer:", "customer-own:")):
+            return []  # the organisation's appetite is not a customer's
         if unit_id:
             below = set(self._descendant_ids(unit_id))
             apps = [a for a in apps if a.business_unit_id in below]

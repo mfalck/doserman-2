@@ -67,6 +67,12 @@ likelihood_bands = [0.05, 0.20, 0.50, 0.80]
 impact_bands = [50000, 250000, 1000000, 5000000]
 currency = "DKK"
 
+[nis2]
+# A single incident above this loss counts as significant (NIS2 art. 23(3); for some digital
+# providers Implementing Regulation (EU) 2024/2690: EUR 500,000 or 5% of turnover). In the currency above.
+significant_loss = 3750000
+# significant_outage_hours = 24      # optionally also an outage longer than this
+
 [user]
 name = ""                           # name recorded in the audit log by the GUI/CLI (default: login name)
 
@@ -117,6 +123,9 @@ class Settings:
     likelihood_bands: Tuple[float, ...] = (0.05, 0.20, 0.50, 0.80)
     impact_bands: Tuple[float, ...] = (50_000, 250_000, 1_000_000, 5_000_000)
     currency: str = "DKK"
+    # NIS2: a single incident above this loss (or longer outage) counts as significant; ~EUR 500,000 in DKK
+    significant_loss: Optional[float] = 3_750_000
+    significant_outage_hours: Optional[float] = None
     user_name: Optional[str] = None
     audit_signing_key: Optional[str] = None
     audit_tsa_url: Optional[str] = None
@@ -244,6 +253,9 @@ def load_settings(path: Optional[str] = None) -> Settings:
         s.likelihood_bands = tuple(scoring.get("likelihood_bands", s.likelihood_bands))
         s.impact_bands = tuple(scoring.get("impact_bands", s.impact_bands))
         s.currency = scoring.get("currency", s.currency)
+        nis2 = data.get("nis2", {})
+        s.significant_loss = nis2.get("significant_loss", s.significant_loss)
+        s.significant_outage_hours = nis2.get("significant_outage_hours", s.significant_outage_hours)
         s.user_name = data.get("user", {}).get("name") or None
         audit_cfg = data.get("audit", {})
         if audit_cfg.get("signing_key"):

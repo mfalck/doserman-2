@@ -15,6 +15,7 @@ packages can add theirs through the entry point group "riskmesh.methods"
 (an object or class with the RiskMethod interface) without touching the core.
 """
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 QUANTITATIVE = "quantitative"
@@ -141,6 +142,7 @@ class ISO27005(RiskMethod):
     the loss per event a lognormal range spanning the consequence band.
     """
     key = "iso27005"
+    version = "2"   # 2: Poisson by default (1: Bernoulli, at most one event a year)
     label = "ISO/IEC 27005 (likelihood x consequence, 1-5)"
     description = ("Qualitative assessment on a 5x5 scale. Converted with the scoring scale to an indicative "
                    "frequency and loss range, so qualitative and quantitative risks can be compared.")
@@ -149,11 +151,19 @@ class ISO27005(RiskMethod):
         {"name": "consequence", "label": "Consequence (1-5)", "kind": "level", "required": True},
         {"name": "residual_likelihood", "label": "Likelihood after controls", "kind": "level", "required": False},
         {"name": "residual_consequence", "label": "Consequence after controls", "kind": "level", "required": False},
+        {"name": "frequency_model", "label": "Events", "kind": "choice", "required": False,
+         "choices": [["poisson", "can happen several times a year"], ["bernoulli", "at most once a year"]]},
         {"name": "rationale", "label": "Rationale", "kind": "text", "required": False},
     ]
 
     def validate(self, inputs):
         out = {}
+        model = inputs.get("frequency_model")
+        if model is None:  # assessments made with version 1 keep the at-most-once model
+            model = "bernoulli" if str(inputs.get("method_version", "")) == "1" else "poisson"
+        if model not in ("poisson", "bernoulli"):
+            raise ValueError("frequency_model must be 'poisson' or 'bernoulli'.")
+        out["frequency_model"] = model
         for f in ("likelihood", "consequence", "residual_likelihood", "residual_consequence"):
             v = _num(inputs, f, 1, 5, required=f in ("likelihood", "consequence"))
             if v is not None:
@@ -183,6 +193,9 @@ class ISO27005(RiskMethod):
 
         def freq(level):
             p = self._probability(level, lb)
+            if inputs.get("frequency_model", "poisson") == "poisson":
+                # the same chance of at least one event a year, but repeats are possible
+                return {"type": "poisson", "rate": round(-math.log(1.0 - p), 6)}
             return {"type": "bernoulli", "p": round(p, 6)}
         out = {"frequency": freq(inputs["likelihood"]), "impact": self._loss(inputs["consequence"], ib),
                "residual_frequency": None, "residual_impact": None}

@@ -120,6 +120,13 @@ risk/control events and asset editing (use the web app, CLI or API).
 
 Risks are treated as independent of each other.
 
+### Uncertain rates, P50/P80 and NIS2 significance
+
+- **Frequency with an uncertain rate.** `{"type": "negbin", "rate": 2, "rate_p90": 4}` means "typically 2 events a year, up to 4". It is a Poisson whose rate is itself uncertain (gamma), a negative binomial. The shape is worked out from the two figures, and the expected loss is the same as with a plain rate of 2, but more years have many events, so the tail is heavier. Both engines support it exactly. In Excel, fill *Events per year, high (P90)* next to *Events per year*. Calibration can keep the remaining uncertainty after the data (`uncertain: true`).
+- **P50 and P80 as headlines.** Reports include P50, P80, P90, P95 and P99. The web app leads with the expected loss, the typical year (P50) and the bad year (P80, 1 in 5), which are the robust figures. P90, P99 and TVaR sit in a tail panel, because the far tail rests on the least certain estimates.
+- **ISO 27005 on Poisson.** Since method version 2 a likelihood level is a Poisson rate with the same chance of at least one event a year, so repeats are possible. `frequency_model: "bernoulli"` keeps "at most once", and assessments made with version 1 keep it automatically.
+- **NIS2 significant incidents.** Significance is about one incident, not a year, so it is not a percentile. `[nis2] significant_loss` (default 3,750,000, about EUR 500,000 in DKK) and optionally `significant_outage_hours` set the threshold. `GET /api/significance` (and `riskmesh significance`) gives, per risk, the share of its incidents above the threshold, the expected significant incidents per year, the chance of at least one, and the total ("about once in 66 years"). Check which thresholds apply to you: NIS2 art. 23(3), and for some digital providers Implementing Regulation (EU) 2024/2690.
+
 ### Assessment methods: ISO 27005, FAIR or your own
 
 A risk can also be assessed in the terms of a method instead of with
@@ -539,6 +546,31 @@ The desktop application and the web app have an *Incidents* page with the
 register, the next deadlines across all incidents and a "sent now" button per
 deadline. Incidents are in the Excel workbook and the audit log. A working aid,
 not legal advice: check the national NIS2 rules and the customers' contracts.
+
+## One customer: scoped analysis and extracts
+
+Every analysis can be scoped to one customer instead of a business unit: pass
+`unit_id` = `customer:<id>` (CLI: `riskmesh simulate --customer "East Savings Bank"`;
+web app: *…or one customer* on the analysis page). The analysis then covers only
+the risks that can hit the customer's services, directly or through the
+suppliers behind them, with every engine, correlation, driver and objective. It
+gives two perspectives:
+
+- **ours** (`customer:<id>`): our loss from the risks to the customer's
+  services;
+- **theirs** (`customer-own:<id>`, `--their-loss`): the customer's own loss, from
+  the outages those risks cause times the customer's
+  `own_loss_per_outage_hour`. Risks that take nothing down are left out and
+  listed under `scope.left_out`.
+
+Scoped runs are stored and reproducible like any other. The assurance report
+shows both perspectives (expected, P50, P80, P99). `GET
+/api/customers/{id}/export.xlsx` (`riskmesh excel export file.xlsx --customer
+...`) writes a workbook with only that customer's part: its services and the
+suppliers behind them, the risks to them, the controls, incidents, objectives,
+drivers and observations that belong to those, and the people and units they
+refer to. References to anything outside the part are left out, so the workbook
+can start a separate analysis.
 
 ## Customer assurance report
 

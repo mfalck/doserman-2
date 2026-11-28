@@ -18,7 +18,7 @@ otherwise inherent):
 import copy
 from typing import Any, Dict, Optional
 
-FREQ_KEYS = {"poisson": "rate", "bernoulli": "p"}
+FREQ_KEYS = {"poisson": "rate", "bernoulli": "p", "negbin": "rate"}
 SCALE_KEYS = {"lognorm_p10_p90": ("p10", "p90"), "pert": ("min", "mode", "max"),
               "triangular": ("min", "mode", "max"), "uniform": ("min", "max"), "fixed": ("value",)}
 
@@ -28,7 +28,10 @@ def scale_frequency(spec: Dict[str, Any], k: float) -> Dict[str, Any]:
     value = float(spec[key]) * k
     if spec["type"] == "bernoulli":
         value = min(value, 1.0)
-    return {**spec, key: round(value, 8)}
+    out = {**spec, key: round(value, 8)}
+    if spec["type"] == "negbin" and spec.get("rate_p90") is not None:
+        out["rate_p90"] = round(float(spec["rate_p90"]) * k, 8)  # same shape: the whole rate scales
+    return out
 
 
 def scale_impact(spec: Dict[str, Any], k: float) -> Optional[Dict[str, Any]]:

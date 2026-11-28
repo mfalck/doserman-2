@@ -224,12 +224,14 @@ class Evidence:
         return rows
 
     def apply_calibration(self, risk_id: str, frequency: bool = True, impact: bool = True,
-                          expert_years: float = 2.0, expert_events: float = 5.0) -> Risk:
+                          expert_years: float = 2.0, expert_events: float = 5.0, uncertain: bool = False) -> Risk:
         """Replaces the risk's (residual) frequency and/or loss with the suggestion; recorded with its basis."""
         c = self.calibrate_risk(risk_id, expert_years, expert_events)
         changes: Dict[str, Any] = {}
         if frequency:
-            changes[c["frequency_field"]] = c["frequency"]["suggested"]
+            # uncertain: keep the remaining uncertainty about the rate (a negative binomial)
+            suggested = c["frequency"].get("suggested_uncertain") if uncertain else None
+            changes[c["frequency_field"]] = suggested or c["frequency"]["suggested"]
         if impact and c["impact"]:
             changes[c["impact_field"]] = c["impact"]["suggested"]
         if not changes:

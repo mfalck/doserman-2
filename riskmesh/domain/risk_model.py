@@ -29,8 +29,8 @@ import numpy as np
 from scipy import stats
 
 Z90 = stats.norm.ppf(0.9)  # ~1.2816
-DEFAULT_PERCENTILES = (50, 90, 95, 99)
-ENGINE_VERSION = "monte_carlo-1"  # bump when results change, so stored runs are not reused
+DEFAULT_PERCENTILES = (50, 80, 90, 95, 99)
+ENGINE_VERSION = "monte_carlo-2"  # bump when results change, so stored runs are not reused
 
 
 # =========================================================================
@@ -96,6 +96,11 @@ def validate_frequency(spec: Dict[str, Any]):
         _require(spec, "p")
         if not 0 <= float(spec["p"]) <= 1:
             raise ValueError("Bernoulli p must be between 0 and 1")
+    elif ftype == "negbin":
+        # a Poisson whose rate is itself uncertain: rate ~ Gamma(shape, mean `rate`)
+        _require(spec, "rate", "shape")
+        if float(spec["rate"]) < 0 or float(spec["shape"]) <= 0:
+            raise ValueError("negbin needs rate >= 0 and shape > 0")
     else:
         raise ValueError(f"Unknown frequency type: {ftype!r}")
 
@@ -104,7 +109,63 @@ def sample_frequency(spec: Dict[str, Any], n: int, rng: np.random.Generator) -> 
     validate_frequency(spec)
     if spec["type"] == "poisson":
         return rng.poisson(float(spec["rate"]), size=n)
+    if spec["type"] == "negbin":
+        return negbin_counts(spec, n, rng)
     return (rng.random(n) < float(spec["p"])).astype(np.int64)
+
+
+def negbin_params(spec: Dict[str, Any]):
+    """numpy/scipy (n, p) for a negbin spec with mean `rate` and gamma `shape`."""
+    k, m = float(spec["shape"]), float(spec["rate"])
+    return k, k / (k + m)
+
+
+def negbin_counts(spec: Dict[str, Any], n: int, rng: np.random.Generator) -> np.ndarray:
+    if float(spec["rate"]) == 0:
+        return np.zeros(n, dtype=np.int64)
+    k, p = negbin_params(spec)
+    return rng.negative_binomial(k, p, size=n)
+
+
+def negbin_from_range(rate: float, rate_p90: float) -> Dict[str, Any]:
+    """
+    The negbin whose rate has mean `rate` and a 90th percentile `rate_p90` (an expert's
+    "typically 2 a year, up to 4"). rate_p90 == rate gives an (almost) plain Poisson.
+    """
+    from scipy.optimize import brentq
+    if rate <= 0:
+        return {"type": "poisson", "rate": 0.0}
+    if rate_p90 <= rate * 1.0001:
+        return {"type": "poisson", "rate": rate}
+
+    def gap(log_k):
+        k = float(np.exp(log_k))
+        return stats.gamma.ppf(0.9, k, scale=rate / k) - rate_p90
+    # P90/mean of a gamma falls with the shape from about 2.7 (shape ~0.45) towards 1; a wider
+    # range than that is not reachable, so it is capped at the widest the model can express
+    lo, hi = np.log(0.45), np.log(1e6)
+    log_k = lo if gap(lo) <= 0 else brentq(gap, lo, hi)
+    spec = {"type": "negbin", "rate": round(rate, 6), "shape": round(float(np.exp(log_k)), 6)}
+    spec["rate_p90"] = round(rate_p90_of(spec), 6)
+    return spec
+
+
+def normalise_frequency(spec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A negbin given as rate + rate_p90 gets its shape; one given with a shape gets its rate_p90 (for display)."""
+    if not spec or spec.get("type") != "negbin":
+        return spec
+    if spec.get("rate_p90") is not None and spec.get("rate") is not None:
+        if float(spec["rate_p90"]) < float(spec["rate"]):
+            raise ValueError("the high estimate (P90) of the rate is below the rate")
+        return negbin_from_range(float(spec["rate"]), float(spec["rate_p90"]))
+    _require(spec, "rate", "shape")
+    return {**spec, "rate_p90": round(rate_p90_of(spec), 6)}
+
+
+def rate_p90_of(spec: Dict[str, Any]) -> float:
+    """The 90th percentile of the uncertain rate of a negbin spec."""
+    k, m = float(spec["shape"]), float(spec["rate"])
+    return float(stats.gamma.ppf(0.9, k, scale=m / k))
 
 
 def sample_impact(spec: Dict[str, Any], n: int, rng: np.random.Generator) -> np.ndarray:
@@ -119,7 +180,7 @@ def sample_impact(spec: Dict[str, Any], n: int, rng: np.random.Generator) -> np.
 def expected_annual_loss(frequency: Dict[str, Any], impact) -> float:
     """Analytical expected annual loss (E[N] * E[X]). `impact` is a spec or a consequences.Severity."""
     validate_frequency(frequency)
-    en = float(frequency["rate"]) if frequency["type"] == "poisson" else float(frequency["p"])
+    en = float(frequency["p"]) if frequency["type"] == "bernoulli" else float(frequency["rate"])
     if hasattr(impact, "mean"):
         return en * impact.mean()
     dist = build_impact_distribution(impact)
@@ -143,6 +204,9 @@ def annual_event_probability(frequency: Dict[str, Any]) -> float:
     validate_frequency(frequency)
     if frequency["type"] == "poisson":
         return float(1 - np.exp(-float(frequency["rate"])))
+    if frequency["type"] == "negbin":
+        k, p = negbin_params(frequency)
+        return float(1 - p ** k)
     return float(frequency["p"])
 
 
@@ -243,6 +307,10 @@ def simulate_driven(frequency: Dict[str, Any], severity, n_trials: int, rng: np.
     validate_frequency(frequency)
     if frequency["type"] == "poisson":
         counts = rng.poisson(float(frequency["rate"]) * freq_mult)
+    elif frequency["type"] == "negbin":
+        k, m = float(frequency["shape"]), float(frequency["rate"])
+        rates = rng.gamma(k, m / k, size=n_trials) * freq_mult if m > 0 else np.zeros(n_trials)
+        counts = rng.poisson(rates)
     else:
         counts = (rng.random(n_trials) < np.minimum(float(frequency["p"]) * freq_mult, 1.0)).astype(np.int64)
     n = int(counts.sum())
