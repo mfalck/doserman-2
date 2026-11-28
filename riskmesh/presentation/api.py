@@ -681,6 +681,21 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         d = body.model_dump()
         return svc.create_control(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
 
+    @api.get("/decisions/controls", tags=["decisions"])
+    async def control_values(tail: bool = True):
+        """What each control is worth: expected loss it removes vs its annualised cost, and its P99 effect."""
+        return svc.control_values(tail)
+
+    @api.get("/decisions/plan", tags=["decisions"])
+    async def investment_plan(budget: float, include_in_progress: bool = True):
+        """Which planned controls to fund within the budget (first-year cost), and what that changes."""
+        return svc.investment_plan(budget, include_in_progress)
+
+    @api.post("/controls/{control_id}/implement", response_model=s.ControlOut, tags=["decisions"])
+    async def implement_control(control_id: str):
+        """Marks the control implemented and builds its effect into its risks' residual estimates."""
+        return svc.implement_control(control_id).to_dict()
+
     @api.get("/controls/{control_id}", response_model=s.ControlOut, tags=["controls"])
     async def get_control(control_id: str):
         return svc.get_control(control_id).to_dict()

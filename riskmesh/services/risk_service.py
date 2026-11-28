@@ -26,6 +26,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
+from .decisions import DECISION_WRITE_METHODS, Decisions
 from .dora import DoraExtract
 from .evidence import EVIDENCE_WRITE_METHODS, Evidence
 from .excel import ExcelExchange
@@ -63,7 +64,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
-                  Objectives, ExcelExchange):
+                  Objectives, Decisions, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -406,6 +407,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             self._enum(e.implementation_status, IMPLEMENTATION_STATUSES, "implementation_status")
             if e.effectiveness_rating is not None and e.effectiveness_rating not in (1, 2, 3, 4, 5):
                 raise ValidationError("effectiveness_rating must be 1-5.")
+            self._validate_control_economics(e)
             e.risk_ids = list(dict.fromkeys(e.risk_ids or []))
         elif isinstance(e, RiskEvent):
             self._name(e, "Risk event")
@@ -1125,7 +1127,8 @@ WRITE_METHODS = (
     "import_data", "label_run", "reset_all", "_store_run",
 ) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
      + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS
-     + EVIDENCE_WRITE_METHODS + OBJECTIVE_WRITE_METHODS)
+     + EVIDENCE_WRITE_METHODS + OBJECTIVE_WRITE_METHODS
+     + DECISION_WRITE_METHODS)
 
 
 def _write(method):

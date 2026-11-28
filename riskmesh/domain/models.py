@@ -323,6 +323,12 @@ class Control(Entity):
     effectiveness_rating: Optional[int] = None  # 1 (weak) .. 5 (strong)
     owner_id: Optional[str] = None
     risk_ids: List[str] = field(default_factory=list)
+    # what it costs and what it does, for decisions (see domain/decisions.py)
+    implementation_cost: Optional[float] = None  # one-off
+    annual_cost: Optional[float] = None          # running cost per year
+    lifetime_years: float = 3.0                  # the implementation cost is spread over this
+    frequency_reduction: Optional[float] = None  # share of events it prevents, 0-0.99
+    impact_reduction: Optional[float] = None     # share of the loss per event it removes, 0-0.99
 
 
 @dataclass

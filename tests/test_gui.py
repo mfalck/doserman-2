@@ -34,7 +34,7 @@ def test_every_page_renders_with_data(window):
                                        for n in ("Overview", "Organisation", "Risks", "Controls"))
     assert dashboard.top.rowCount() == 5 and dashboard.cards["risks"].value.text() == "7"
     assert org.tree.topLevelItemCount() == 1
-    assert risks.table.rowCount() == 7 and controls.table.rowCount() == 5
+    assert risks.table.rowCount() == 7 and controls.table.rowCount() == 9
 
 
 def test_analysis_page_runs_and_reuses(window):
@@ -257,3 +257,26 @@ def test_objectives_page_and_dialog(window):
     o = window.svc.list_objectives()[0]
     v = ObjectiveDialog(window.svc, o).values()
     assert v["service_ids"] == o.service_ids and v["tolerance_probability"] == pytest.approx(o.tolerance_probability)
+
+
+def test_decisions_page_values_plans_and_implements(window, monkeypatch):
+    page = window.pages[window.PAGES.index("Decisions")]
+    window.nav.setCurrentRow(window.PAGES.index("Decisions"))
+    names = [page.table.item(r, 0).text() for r in range(page.table.rowCount())]
+    assert "Offline backups" in names and "Database high-availability cluster" in names
+    page.budget.setValue(400_000)
+    page.run_plan()
+    assert "Database high-availability cluster" in page.plan.toPlainText()
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *a, **k: QtWidgets.QMessageBox.Yes)
+    page.table.selectRow(names.index("Call-back verification of new payees"))
+    page.implement()
+    c = next(c for c in window.svc.list_controls() if c.name == "Call-back verification of new payees")
+    assert c.implementation_status == "IMPLEMENTED"
+
+
+def test_control_dialog_keeps_costs_and_effect(window):
+    from riskmesh.gui.dialogs import ControlDialog
+    c = next(c for c in window.svc.list_controls() if c.name == "Second hosting provider")
+    v = ControlDialog(window.svc, c).values()
+    assert (v["implementation_cost"], v["annual_cost"], v["frequency_reduction"], v["impact_reduction"]) == \
+        (c.implementation_cost, c.annual_cost, c.frequency_reduction, c.impact_reduction)

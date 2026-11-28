@@ -272,6 +272,44 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Decisions: what controls are worth, and what to fund
+
+A control can carry its cost (`implementation_cost` one-off, `annual_cost`,
+`lifetime_years`) and its effect: the share of events it prevents
+(`frequency_reduction`) and the share of the loss per event it removes
+(`impact_reduction`, which also shortens outages). Effects of several controls
+on one risk multiply.
+
+`GET /api/decisions/controls` values every control on the current estimates:
+
+- a planned control by what it would remove: its effect added to the risks'
+  current (residual) estimates;
+- an implemented control by what we would lose without it: its effect taken
+  out again.
+
+Per control: expected annual loss removed, cost per year (annual cost plus the
+implementation cost spread over the lifetime), net, return (ROSI), payback,
+and the P99 effect on the total. The P99 effect is where e.g. backups show
+their worth: little on the average, a lot on the 1-in-100 year.
+
+`GET /api/decisions/plan?budget=400000` picks planned (and in-progress)
+controls within a first-year budget, by loss removed per unit of cost, each on
+top of those already picked (so two controls on one risk are not counted
+twice), and shows the expected loss, P90 and P99 before and after, and which
+appetites and objective tolerances that changes. Tail figures come from the
+analytic engine (risks independent).
+
+`POST /api/controls/{id}/implement` marks a planned control implemented and
+builds its effect into the residual estimates of its risks, recorded in the
+audit log, so it is not counted twice afterwards.
+
+```bash
+riskmesh decisions --budget 400000
+```
+
+The desktop application and the web app have a *Decisions* page; the control
+forms and the Excel workbook (*Controls*) have the cost and effect fields.
+
 ## Objectives: what the risks threaten
 
 An **objective** is something the organisation must achieve: "keep the citizen

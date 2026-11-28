@@ -265,10 +265,31 @@ class ControlDialog(BaseDialog):
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if r.id in linked else Qt.Unchecked)
             self.risks.addItem(item)
+        c = control
+        self.impl_cost = QLineEdit("" if not c or c.implementation_cost is None else f"{c.implementation_cost:g}")
+        self.impl_cost.setPlaceholderText("one-off")
+        self.annual_cost = QLineEdit("" if not c or c.annual_cost is None else f"{c.annual_cost:g}")
+        self.annual_cost.setPlaceholderText("per year: licences, staff, service")
+        self.lifetime = QDoubleSpinBox()
+        self.lifetime.setRange(0.5, 30)
+        self.lifetime.setValue(c.lifetime_years if c else 3.0)
+        self.lifetime.setSuffix(" years")
+        self.freq_red = QSpinBox()
+        self.freq_red.setRange(0, 99)
+        self.freq_red.setSuffix(" %")
+        self.freq_red.setValue(round((c.frequency_reduction or 0) * 100) if c else 0)
+        self.freq_red.setToolTip("Share of the events it prevents")
+        self.impact_red = QSpinBox()
+        self.impact_red.setRange(0, 99)
+        self.impact_red.setSuffix(" %")
+        self.impact_red.setValue(round((c.impact_reduction or 0) * 100) if c else 0)
+        self.impact_red.setToolTip("Share of the loss per event it removes (also shortens outages)")
         for label, w in (("Name", self.name), ("Organisation", self.unit), ("Type", self.kind),
                          ("Implementation", self.status), ("Effectiveness (1-5)", self.rating),
                          ("Owner", self.owner), ("Description", self.description),
-                         ("Mitigates these risks", self.risks)):
+                         ("Mitigates these risks", self.risks), ("Implementation cost", self.impl_cost),
+                         ("Annual cost", self.annual_cost), ("Lifetime", self.lifetime),
+                         ("Prevents events", self.freq_red), ("Reduces loss per event", self.impact_red)):
             self.form.addRow(label, w)
         self.finish()
 
@@ -278,7 +299,11 @@ class ControlDialog(BaseDialog):
         return {"name": self.name.text(), "business_unit_id": self.unit.currentData(),
                 "control_type": self.kind.currentData(), "implementation_status": self.status.currentData(),
                 "effectiveness_rating": self.rating.value() or None, "owner_id": self.owner.currentData(),
-                "description": self.description.toPlainText().strip() or None, "risk_ids": risk_ids}
+                "description": self.description.toPlainText().strip() or None, "risk_ids": risk_ids,
+                "implementation_cost": _float(self.impl_cost), "annual_cost": _float(self.annual_cost),
+                "lifetime_years": self.lifetime.value(),
+                "frequency_reduction": self.freq_red.value() / 100 or None,
+                "impact_reduction": self.impact_red.value() / 100 or None}
 
 
 

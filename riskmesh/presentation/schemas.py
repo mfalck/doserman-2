@@ -205,6 +205,11 @@ class ControlCreate(_In):
     effectiveness_rating: Optional[int] = Field(None, ge=1, le=5)
     owner_id: Optional[str] = None
     risk_ids: List[str] = []
+    implementation_cost: Optional[float] = Field(None, ge=0)
+    annual_cost: Optional[float] = Field(None, ge=0)
+    lifetime_years: float = Field(3.0, gt=0)
+    frequency_reduction: Optional[float] = Field(None, ge=0, le=0.99)
+    impact_reduction: Optional[float] = Field(None, ge=0, le=0.99)
 
 
 class ControlUpdate(_In):
@@ -216,6 +221,11 @@ class ControlUpdate(_In):
     effectiveness_rating: Optional[int] = Field(None, ge=1, le=5)
     owner_id: Optional[str] = None
     risk_ids: Optional[List[str]] = None
+    implementation_cost: Optional[float] = Field(None, ge=0)
+    annual_cost: Optional[float] = Field(None, ge=0)
+    lifetime_years: Optional[float] = Field(None, gt=0)
+    frequency_reduction: Optional[float] = Field(None, ge=0, le=0.99)
+    impact_reduction: Optional[float] = Field(None, ge=0, le=0.99)
 
 
 class ControlOut(_Out):
@@ -227,6 +237,11 @@ class ControlOut(_Out):
     effectiveness_rating: Optional[int] = None
     owner_id: Optional[str] = None
     risk_ids: List[str] = []
+    implementation_cost: Optional[float] = None
+    annual_cost: Optional[float] = None
+    lifetime_years: float = 3.0
+    frequency_reduction: Optional[float] = None
+    impact_reduction: Optional[float] = None
 
 
 # -- Third parties: suppliers, services, customers --------------------------------

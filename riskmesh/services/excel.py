@@ -162,6 +162,11 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Effectiveness 1-5", "effectiveness_rating", "int", width=10),
         Col("Owner", "owner_id", "ref", ref=Person, width=20),
         Col("Risks", "risk_ids", "refs", ref=Risk, width=30),
+        Col("Implementation cost", "implementation_cost", "number", width=14),
+        Col("Annual cost", "annual_cost", "number", width=12),
+        Col("Lifetime years", "lifetime_years", "number", width=9),
+        Col("Fewer events %", "frequency_reduction", "percent", width=10),
+        Col("Lower loss per event %", "impact_reduction", "percent", width=10),
         Col("Description", "description", width=40)]),
     ("Risk events", RiskEvent, [
         Col("Name", "name", required=True, width=28),
@@ -222,6 +227,7 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Controls: costs and effect (Fewer events %, Lower loss per event %) value the control (Decisions).",
     "- Objectives: what we must achieve. Risks threaten one when they name it (Threatens objectives) or can",
     "    disrupt a service it is delivered through. Tolerance: at most this chance per year of losing more.",
     "- Observations: events that happened, one row per event or a count (Count) with their total Loss.",
@@ -615,7 +621,7 @@ class ExcelExchange:
             d[c.field] = _bool(raw)
         elif c.kind == "number":
             v = _number(raw)
-            if v is None and c.field in ("weight",):
+            if v is None and c.field in ("weight", "lifetime_years"):
                 return  # empty: the stored value or the default (1)
             d[c.field] = v
         elif c.kind == "int":

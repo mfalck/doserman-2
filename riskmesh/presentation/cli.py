@@ -340,6 +340,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
+    decp = sub.add_parser("decisions", help="what each control is worth, and what to fund within a budget")
+    decp.add_argument("--budget", type=float, help="show the investment plan for this first-year budget")
     calp = sub.add_parser("calibrate", help="what observed events and benchmarks say about the estimates")
     calp.add_argument("risk", nargs="?", help="risk name: show the details (and --apply)")
     calp.add_argument("--expert-years", type=float, default=2.0, help="weight of the estimate in years of data")
@@ -585,6 +587,27 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "decisions":
+        v = svc.control_values()
+        print(f"{'Control':<38}{'Status':<13}{'Loss removed':>13}{'Cost/yr':>11}{'Net':>12}{'P99 effect':>13}")
+        for c in v["controls"]:
+            p99 = c.get("p99_without", 0) - c.get("p99_with", 0)
+            print(f"{c['name'][:37]:<38}{c['status'].lower():<13}{money(c['benefit'])[-13:]:>13}"
+                  f"{money(c['annualised_cost'])[-11:]:>11}{money(c['net_benefit'])[-12:]:>12}{money(p99)[-13:]:>13}")
+        for m in v["not_quantified"]:
+            print(f"  not quantified: {m['name']} (missing {', '.join(m['missing'])})")
+        if args.budget is not None:
+            p = svc.investment_plan(args.budget)
+            print(f"\nPlan for a budget of {money(args.budget).strip()} (first-year cost):")
+            for s_ in p["chosen"]:
+                print(f"  + {s_['name']:<40}{money(s_['first_year_cost'])}  removes {money(s_['benefit']).strip()}/yr")
+            if "before" in p:
+                b, a = p["before"], p["after"]
+                print(f"  expected loss {money(b['mean']).strip()} -> {money(a['mean']).strip()}, "
+                      f"P99 {money(b['p99']).strip()} -> {money(a['p99']).strip()}")
+                for ob, oa in zip(b["objectives"], a["objectives"]):
+                    if ob["breached"] != oa["breached"]:
+                        print(f"  objective '{oa['name']}' {'back within' if not oa['breached'] else 'now outside'} tolerance")
     elif args.command == "objectives":
         o = svc.objective_overview()
         for x in o["objectives"]:

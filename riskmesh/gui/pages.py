@@ -1219,6 +1219,95 @@ class IncidentsPage(Page):
             self.changed()
 
 
+class DecisionsPage(Page):
+    """What each control is worth, and which planned controls to fund within a budget."""
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Decisions"))
+        intro = QLabel("A control's value is the expected loss it removes from its risks, against its cost per year "
+                       "(annual cost + implementation cost spread over its lifetime). P99 effect: how much it lowers "
+                       "the 1-in-100 year total. Give controls a cost and an effect in the control form.")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        bar = QHBoxLayout()
+        self.budget = QSpinBox()
+        self.budget.setRange(0, 1_000_000_000)
+        self.budget.setSingleStep(50_000)
+        self.budget.setValue(400_000)
+        self.budget.setGroupSeparatorShown(True)
+        plan = QPushButton("Plan within budget")
+        plan.clicked.connect(self.run_plan)
+        implement = QPushButton("Implement selected")
+        implement.setToolTip("Mark the planned control implemented and build its effect into its risks")
+        implement.clicked.connect(self.implement)
+        self.edit_buttons.append(implement)
+        bar.addWidget(QLabel("First-year budget"))
+        bar.addWidget(self.budget)
+        bar.addWidget(plan)
+        bar.addStretch()
+        bar.addWidget(implement)
+        self.layout_.addLayout(bar)
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Control", "Status", "Loss removed /yr", "Cost /yr", "Net /yr", "Return", "P99 effect"],
+                           numeric=[2, 3, 4, 5, 6])
+        split.addWidget(self.table)
+        self.plan = QPlainTextEdit()
+        self.plan.setReadOnly(True)
+        self.plan.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.plan.setPlaceholderText("Choose a budget and press 'Plan within budget'")
+        split.addWidget(self.plan)
+        self.layout_.addWidget(split, 1)
+
+    def refresh(self) -> None:
+        v = self.svc.control_values()
+        rows, colors = [], {}
+        for i, c in enumerate(v["controls"]):
+            colors[(i, 4)] = "#bbf7d0" if c["net_benefit"] > 0 else "#fecaca"
+            rows.append([c["name"], title(c["status"]), money(c["benefit"]), money(c["annualised_cost"]),
+                         money(c["net_benefit"]), "" if c["rosi"] is None else f"{c['rosi']:+.0%}",
+                         money(c.get("p99_without", 0) - c.get("p99_with", 0))])
+        self.table.fill(rows, keys=[c["id"] for c in v["controls"]], colors=colors)
+        missing = [f"{m['name']} (missing {', '.join(m['missing'])})" for m in v["not_quantified"]]
+        if missing and not self.plan.toPlainText():
+            self.plan.setPlaceholderText("Not quantified yet: " + "; ".join(missing))
+
+    def run_plan(self) -> None:
+        p = guarded(self, lambda: self.svc.investment_plan(float(self.budget.value())))
+        if not p:
+            return
+        lines = [f"Budget {money(p['budget']).strip()}, used {money(p['spent']).strip()} (first-year cost)"]
+        lines += [f"  + {s['name']:<40}{money(s['first_year_cost'])}   removes {money(s['benefit']).strip()}/yr"
+                  for s in p["chosen"]] or ["  (nothing within the budget removes loss)"]
+        if "before" in p:
+            b, a = p["before"], p["after"]
+            lines += ["", f"Expected loss {money(b['mean']).strip()} -> {money(a['mean']).strip()}   "
+                          f"P99 {money(b['p99']).strip()} -> {money(a['p99']).strip()}"]
+            for ob, oa in zip(b["objectives"], a["objectives"]):
+                if ob["breached"] != oa["breached"]:
+                    lines.append(f"Objective '{oa['name']}': {'back within' if not oa['breached'] else 'now outside'}"
+                                 " tolerance")
+            for ab, aa in zip(b["appetite"], a["appetite"]):
+                if ab["breached"] != aa["breached"]:
+                    lines.append(f"Appetite '{aa['name']}': {'kept' if not aa['breached'] else 'exceeded'}")
+        if p["left_out"]:
+            lines += ["", "Not funded: " + ", ".join(c["name"] for c in p["left_out"])]
+        lines += ["", p["note"]]
+        self.plan.setPlainText("\n".join(lines))
+
+    def implement(self) -> None:
+        key = self.table.selected_key()
+        if not key:
+            QMessageBox.information(self, "Decisions", "Select a planned control first.")
+            return
+        c = self.svc.get_control(key)
+        if QMessageBox.question(self, "Implement", f"Mark '{c.name}' implemented and build its effect into the "
+                                "residual estimates of its risks?") != QMessageBox.Yes:
+            return
+        if guarded(self, lambda: self.svc.implement_control(key)):
+            self.changed()
+
+
 class ObjectivesPage(Page):
     """What we must achieve, the risks that threaten it and the risk to each objective."""
 
@@ -1489,6 +1578,7 @@ for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (IncidentsPage, ("add", "edit", "delete", "mark")),
                      (EvidencePage, ("add", "edit", "delete", "apply")),
                      (ObjectivesPage, ("add", "edit", "delete")),
+                     (DecisionsPage, ("implement",)),
                      (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
                                       "edit_correlation", "delete_correlation"))):
     for _name in _names:

@@ -186,18 +186,36 @@ def seed_demo(svc: RiskService) -> None:
     # Controls and their tests
     edr = svc.create_control(it.id, "EDR on all endpoints", control_type="PREVENTIVE",
                              implementation_status="IMPLEMENTED", effectiveness_rating=4,
-                             owner_id=jane.id, risk_ids=[ransomware.id])
+                             owner_id=jane.id, risk_ids=[ransomware.id],
+                             implementation_cost=150_000, annual_cost=90_000, frequency_reduction=0.6)
     backups = svc.create_control(it.id, "Offline backups", control_type="CORRECTIVE",
                                  implementation_status="IMPLEMENTED", effectiveness_rating=4,
-                                 owner_id=jane.id, risk_ids=[ransomware.id])
+                                 owner_id=jane.id, risk_ids=[ransomware.id],
+                                 implementation_cost=80_000, annual_cost=40_000, impact_reduction=0.5)
     pentest = svc.create_control(dev.id, "Annual penetration test", control_type="DETECTIVE",
                                  implementation_status="IMPLEMENTED", effectiveness_rating=3,
-                                 owner_id=david.id, risk_ids=[breach.id])
+                                 owner_id=david.id, risk_ids=[breach.id], annual_cost=60_000,
+                                 frequency_reduction=0.3)
     svc.create_control(dev.id, "Web application firewall", control_type="PREVENTIVE",
-                       implementation_status="IN_PROGRESS", owner_id=david.id, risk_ids=[breach.id])
+                       implementation_status="IN_PROGRESS", owner_id=david.id, risk_ids=[breach.id],
+                       implementation_cost=60_000, annual_cost=25_000, frequency_reduction=0.4)
     four_eyes = svc.create_control(finance.id, "Four-eyes approval of payments", control_type="PREVENTIVE",
                                    implementation_status="IMPLEMENTED", effectiveness_rating=3,
-                                   owner_id=john.id, risk_ids=[fraud.id])
+                                   owner_id=john.id, risk_ids=[fraud.id], annual_cost=25_000,
+                                   frequency_reduction=0.5)
+    # Candidates: what would we get for the money? (Analysis > investment plan)
+    svc.create_control(it.id, "Database high-availability cluster", control_type="CORRECTIVE",
+                       owner_id=jane.id, risk_ids=[outage.id], implementation_cost=250_000, annual_cost=60_000,
+                       impact_reduction=0.6, description="Fail-over within minutes instead of hours")
+    svc.create_control(it.id, "Second hosting provider", control_type="CORRECTIVE", owner_id=jane.id,
+                       risk_ids=[outage.id], implementation_cost=400_000, annual_cost=120_000,
+                       frequency_reduction=0.3, impact_reduction=0.3, description="Also the exit plan DORA asks for")
+    svc.create_control(finance.id, "Call-back verification of new payees", control_type="PREVENTIVE",
+                       owner_id=john.id, risk_ids=[fraud.id], implementation_cost=20_000, annual_cost=15_000,
+                       frequency_reduction=0.6)
+    svc.create_control(hq.id, "Phishing awareness training", control_type="DIRECTIVE", owner_id=mike.id,
+                       risk_ids=[ransomware.id, breach.id], implementation_cost=10_000, annual_cost=30_000,
+                       frequency_reduction=0.25)
 
     svc.create_control_event(edr.id, "2026-09-15", event_type="TEST", status="PASSED",
                              description="Quarterly EDR coverage check: 99.6% of endpoints")

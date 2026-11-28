@@ -108,7 +108,7 @@ def test_dashboard_has_trend_and_severity(svc):
     assert len(d["risk_trend"]) == 6
     assert d["risk_trend"][-1]["total"] == 7  # all demo risks were created now
     assert sum(x["count"] for x in d["risks_by_severity"]) == 7
-    assert d["counts"]["controls"] == 5 and d["counts"]["controls_implemented"] == 4
+    assert d["counts"]["controls"] == 9 and d["counts"]["controls_implemented"] == 4
     assert 0 <= d["control_effectiveness"] <= 100
     assert d["top_units_by_risk_count"][0]["count"] == 2  # IT
 
