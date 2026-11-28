@@ -27,7 +27,7 @@ from ..domain.errors import ValidationError
 from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             Benchmark, ControlEvent, Correlation, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             Benchmark, ControlEvent, Correlation, Driver, DriverEffect, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -143,6 +143,17 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Evidence categories", "evidence_categories", "list", width=24),
         Col("Threatens objectives", "objective_ids", "refs", ref=Objective, width=28),
         Col("Description", "description", width=40)]),
+    ("Drivers", Driver, [
+        Col("Name", "name", required=True, width=30), Col("Level", "level", "number", width=8),
+        Col("Bad-year multiplier", "uncertainty", "number", width=10),
+        Col("Owner", "owner_id", "ref", ref=Person, width=20), Col("Indicator", "indicator", width=34),
+        Col("Description", "description", width=40)]),
+    ("Driver effects", DriverEffect, [
+        Col("Driver", "driver_id", "ref", required=True, ref=Driver, width=28),
+        Col("Risk", "risk_id", "ref", required=True, ref=Risk, width=28),
+        Col("Frequency sensitivity", "frequency_sensitivity", "number", width=11),
+        Col("Loss sensitivity", "impact_sensitivity", "number", width=11),
+        Col("Rationale", "rationale", width=40)]),
     ("Correlations", Correlation, [
         Col("Risk A", "risk_a_id", "ref", required=True, ref=Risk, width=28),
         Col("Risk B", "risk_b_id", "ref", required=True, ref=Risk, width=28),
@@ -227,6 +238,8 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Drivers: common causes. Level 1 = as estimated; Bad-year multiplier e.g. 1.5. Driver effects: how",
+    "    strongly each risk follows its driver (sensitivity 1 = proportionally, 0.5 weaker, 2 stronger).",
     "- Controls: costs and effect (Fewer events %, Lower loss per event %) value the control (Decisions).",
     "- Objectives: what we must achieve. Risks threaten one when they name it (Threatens objectives) or can",
     "    disrupt a service it is delivered through. Tolerance: at most this chance per year of losing more.",
@@ -621,7 +634,8 @@ class ExcelExchange:
             d[c.field] = _bool(raw)
         elif c.kind == "number":
             v = _number(raw)
-            if v is None and c.field in ("weight", "lifetime_years"):
+            if v is None and c.field in ("weight", "lifetime_years", "level", "uncertainty", "frequency_sensitivity",
+                                         "impact_sensitivity"):
                 return  # empty: the stored value or the default (1)
             d[c.field] = v
         elif c.kind == "int":

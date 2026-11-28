@@ -284,6 +284,41 @@ class Benchmark(Entity):
 
 
 @dataclass
+class Driver(Entity):
+    """
+    A common cause behind several risks: "patch and access hygiene", "economic
+    downturn", "hosting platform stability". Its `level` scales the risks it
+    drives (1 = as estimated; 0.7 = 30% better, 1.5 = 50% worse), which is how
+    interventions are tried out. `uncertainty` is how much it varies from year
+    to year: the multiplier in a bad year (1 in 10), e.g. 1.5. A bad year of the
+    driver is a bad year for every risk it drives, so the risks move together
+    for a reason - applied by the Monte Carlo engine.
+    """
+    kind: ClassVar[str] = "driver"
+    name: str
+    description: Optional[str] = None
+    owner_id: Optional[str] = None
+    level: float = 1.0
+    uncertainty: float = 1.0                     # P90 of the yearly multiplier (1 = no variation)
+    indicator: Optional[str] = None              # what is measured, e.g. "% of critical patches within 14 days"
+
+
+@dataclass
+class DriverEffect(Entity):
+    """
+    How strongly a driver moves a risk: elasticities. With sensitivity 1 the
+    frequency doubles when the driver doubles; 0.5 is a weaker link, 2 a
+    stronger one, 0 none.
+    """
+    kind: ClassVar[str] = "driver_effect"
+    driver_id: str
+    risk_id: str
+    frequency_sensitivity: float = 1.0
+    impact_sensitivity: float = 0.0
+    rationale: Optional[str] = None
+
+
+@dataclass
 class Correlation(Entity):
     """
     How strongly two risks tend to have bad years together, from -1 to 1.
@@ -519,7 +554,8 @@ class PeriodFact(Entity):
 
 
 # Data entities in dependency order (referenced types first)
-DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Objective, Risk, Correlation, Appetite, Control,
+DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Objective, Risk, Driver, DriverEffect,
+              Correlation, Appetite, Control,
               RiskEvent, ControlEvent, Incident, Observation, Benchmark)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
@@ -549,6 +585,9 @@ REFERENCES = [
     (Service, "supplier_ids", Supplier, True, "DEPENDS_ON"),
     (Customer, "service_ids", Service, True, "USES"),
     (Customer, "account_owner_id", Person, False, "ACCOUNT_OWNER"),
+    (Driver, "owner_id", Person, False, "OWNED_BY"),
+    (DriverEffect, "driver_id", Driver, False, "DRIVES"),
+    (DriverEffect, "risk_id", Risk, False, "DRIVEN"),
     (Correlation, "risk_a_id", Risk, False, "CORRELATES"),
     (Correlation, "risk_b_id", Risk, False, "CORRELATES"),
     (Appetite, "business_unit_id", BusinessUnit, False, "APPLIES_TO"),

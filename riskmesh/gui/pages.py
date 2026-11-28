@@ -7,13 +7,13 @@ from typing import Any, Callable, Dict, Optional
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QLogValueAxis, QValueAxis
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from ..services import RiskService
 from .dialogs import (AppetiteDialog, BenchmarkDialog, ControlDialog, CorrelationDialog, CustomerDialog,
-                      IncidentDialog, ObjectiveDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog,
+                      DriverDialog, DriverEffectDialog, IncidentDialog, ObjectiveDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog,
                       UnitDialog)
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
@@ -1219,6 +1219,148 @@ class IncidentsPage(Page):
             self.changed()
 
 
+class DriversPage(Page):
+    """Common causes behind risks, how much each matters, and what changing one would do."""
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Drivers"))
+        intro = QLabel("A driver is a common cause behind several risks. Its level scales them (1 = as estimated); "
+                       "its bad-year multiplier makes them have bad years together (Monte Carlo). The swing columns "
+                       "show the total with the driver 20% lower vs 20% higher: which causes matter most.")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        bar = QHBoxLayout()
+        for text, slot in (("New driver", self.add), ("Edit", self.edit), ("Delete", self.delete),
+                           ("Add effect on a risk", self.add_effect)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        bar.addStretch()
+        self.try_level = QDoubleSpinBox()
+        self.try_level.setRange(0.05, 20)
+        self.try_level.setSingleStep(0.1)
+        self.try_level.setValue(0.8)
+        try_btn = QPushButton("What if")
+        try_btn.setToolTip("What would the selected driver at this level do?")
+        try_btn.clicked.connect(self.what_if)
+        bar.addWidget(QLabel("Try level"))
+        bar.addWidget(self.try_level)
+        bar.addWidget(try_btn)
+        self.layout_.addLayout(bar)
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Driver", "Level", "Bad year", "Risks", "Drives EAL", "EAL swing", "P99 swing", "Indicator"],
+                           numeric=[1, 2, 3, 4, 5, 6])
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.table.itemSelectionChanged.connect(self.show_effects)
+        split.addWidget(self.table)
+        bottom = QWidget()
+        bl = QHBoxLayout(bottom)
+        self.effects = Table(["Risk", "Frequency", "Loss", "Rationale"], numeric=[1, 2])
+        self.effects.doubleClicked.connect(lambda *_: self.edit_effect())
+        bl.addWidget(self.effects, 2)
+        self.result = QPlainTextEdit()
+        self.result.setReadOnly(True)
+        self.result.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        self.result.setPlaceholderText("Select a driver, choose a level and press 'What if'")
+        bl.addWidget(self.result, 3)
+        split.addWidget(bottom)
+        self.layout_.addWidget(split, 1)
+        self._overview: Dict[str, Any] = {}
+
+    def refresh(self) -> None:
+        self._overview = o = self.svc.driver_overview()
+        self.table.fill([[d["name"], f"{d['level']:g}", f"x{d['uncertainty']:g}", len(d["effects"]),
+                          money(d["driven_eal"]), money(d["swing_mean"]), money(d["swing_p99"]), d["indicator"] or ""]
+                         for d in o["drivers"]], keys=[d["id"] for d in o["drivers"]])
+        self.effects.fill([])
+
+    def show_effects(self) -> None:
+        key = self.table.selected_key()
+        d = next((d for d in self._overview.get("drivers", []) if d["id"] == key), None)
+        if d:
+            self.effects.fill([[e["risk"], f"{e['frequency_sensitivity']:g}", f"{e['impact_sensitivity']:g}",
+                                e["rationale"] or ""] for e in d["effects"]], keys=[e["id"] for e in d["effects"]])
+            self.try_level.setValue(round(d["level"] * 0.8, 2))
+
+    def what_if(self) -> None:
+        key = self.table.selected_key()
+        if not key:
+            QMessageBox.information(self, "Drivers", "Select a driver first.")
+            return
+        w = guarded(self, lambda: self.svc.driver_what_if({key: self.try_level.value()}))
+        if not w:
+            return
+        lv = next(iter(w["levels"].values()))
+        lines = [f"{lv['name']}: level {lv['from']:g} -> {lv['to']:g}", ""]
+        lines += [f"  {r['name']:<30}{money(r['before'])} -> {money(r['after'])}" for r in w["risks"]]
+        if "before" in w:
+            b, a = w["before"], w["after"]
+            lines += ["", f"Expected loss {money(b['mean']).strip()} -> {money(a['mean']).strip()}",
+                      f"P99           {money(b['p99']).strip()} -> {money(a['p99']).strip()}"]
+            for ob, oa in zip(b["objectives"], a["objectives"]):
+                if ob["breached"] != oa["breached"]:
+                    lines.append(f"Objective '{oa['name']}': {'back within' if not oa['breached'] else 'now outside'}"
+                                 " tolerance")
+            for ab, aa in zip(b["appetite"], a["appetite"]):
+                if ab["breached"] != aa["breached"]:
+                    lines.append(f"Appetite '{aa['name']}': {'kept' if not aa['breached'] else 'exceeded'}")
+        lines += ["", "Levels only (analytic); to keep it, edit the driver's level."]
+        self.result.setPlainText("\n".join(lines))
+
+    def add(self):
+        dialog = DriverDialog(self.svc, parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_driver(v.pop("name"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        dialog = DriverDialog(self.svc, self.svc.get_driver(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_driver(key, **dialog.values())):
+                    self.changed()
+
+    def delete(self):
+        key = self.table.selected_key()
+        if key and QMessageBox.question(self, "Delete", f"Delete the driver '{self.svc.get_driver(key).name}' and "
+                                        "its effects?") == QMessageBox.Yes:
+            if guarded(self, lambda: self.svc.delete_driver(key)) is not None:
+                self.changed()
+
+    def add_effect(self):
+        if not self.svc.list_drivers():
+            QMessageBox.information(self, "Drivers", "Create a driver first.")
+            return
+        dialog = DriverEffectDialog(self.svc, driver_id=self.table.selected_key(), parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_driver_effect(v.pop("driver_id"), v.pop("risk_id"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit_effect(self):
+        key = self.effects.selected_key()
+        if not key:
+            return
+        effect = next(e for e in self.svc.list_driver_effects() if e.id == key)
+        dialog = DriverEffectDialog(self.svc, effect, parent=self)
+        if dialog.exec():
+            v = dialog.values()
+            v.pop("driver_id"), v.pop("risk_id")
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_driver_effect(key, **v)):
+                    self.changed()
+
+
 class DecisionsPage(Page):
     """What each control is worth, and which planned controls to fund within a budget."""
 
@@ -1579,6 +1721,7 @@ for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (EvidencePage, ("add", "edit", "delete", "apply")),
                      (ObjectivesPage, ("add", "edit", "delete")),
                      (DecisionsPage, ("implement",)),
+                     (DriversPage, ("add", "edit", "delete", "add_effect", "edit_effect")),
                      (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
                                       "edit_correlation", "delete_correlation"))):
     for _name in _names:

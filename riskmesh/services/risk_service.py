@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
 from ..domain import analytic, audit, risk_model
+from ..domain.consequences import Severity
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
                              VERIFIED_TYPES, ApiToken, User,
@@ -28,6 +29,7 @@ from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .decisions import DECISION_WRITE_METHODS, Decisions
 from .dora import DoraExtract
+from .drivers import DRIVER_WRITE_METHODS, Drivers
 from .evidence import EVIDENCE_WRITE_METHODS, Evidence
 from .excel import ExcelExchange
 from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
@@ -64,7 +66,8 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
-                  Objectives, Decisions, ExcelExchange):
+                  Objectives, Decisions, Drivers,
+                  ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -420,7 +423,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
         elif not (self._validate_portfolio(e) or self._validate_incident(e) or self._validate_evidence(e)
-                     or self._validate_objective(e)):
+                     or self._validate_objective(e) or self._validate_driver(e)):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -594,10 +597,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         s = self.scoring
         if risk.outage_hours or risk.residual_outage_hours:
             graph = graph or self._graph()
-        inherent = risk_model.risk_scores(risk.frequency, self.risk_severity(risk, False, graph),
-                                          s.likelihood_bands, s.impact_bands)
-        residual = risk_model.risk_scores(risk.residual_frequency or risk.frequency,
-                                          self.risk_severity(risk, True, graph),
+        e = self.engine_risk(risk, graph)  # incl. consequences and the drivers' levels
+
+        def severity(residual: bool):
+            sev = Severity.from_risk(e, residual)
+            return sev if sev.has_consequences else sev.impact
+        inherent = risk_model.risk_scores(e["frequency"], severity(False), s.likelihood_bands, s.impact_bands)
+        residual = risk_model.risk_scores(e.get("residual_frequency") or e["frequency"], severity(True),
                                           s.likelihood_bands, s.impact_bands)
         return {"inherent": inherent, "residual": residual}
 
@@ -762,6 +768,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         else:
             raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
         report["residual"] = residual
+        risks_ = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
+        driven = {link["id"] for links in self._driver_links().values() for link in links}
+        if driven and risks_:
+            report["drivers"] = {"count": len(driven), "variation_applied": engine == "monte_carlo",
+                                 "note": None if engine == "monte_carlo" else
+                                 "The analytic engine applies the drivers' levels, not their year-to-year variation; "
+                                 "use Monte Carlo for that."}
         return report
 
     def compare_inherent_residual(self, n_trials: int = 10_000, seed: int = 42,
@@ -783,7 +796,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         """Exactly the data a report depends on (and nothing else)."""
         risks = self.list_risks(unit_id, include_children=True) if unit_id else self.repo.list(Risk)
         fields = ("id", "name", "business_unit_id", "frequency", "impact", "residual_frequency", "residual_impact")
-        shock = ("outage_hours", "residual_outage_hours", "consequences")
+        shock = ("outage_hours", "residual_outage_hours", "consequences", "drivers")
         engine = self.engine_risks(risks)
         # outage fields only when used, so the fingerprints of runs made before they existed stay valid
         rows = [{**{f: getattr(r, f) for f in fields}, **{f: engine[r.id][f] for f in shock if engine[r.id].get(f)}}
@@ -1128,7 +1141,7 @@ WRITE_METHODS = (
 ) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
      + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS
      + EVIDENCE_WRITE_METHODS + OBJECTIVE_WRITE_METHODS
-     + DECISION_WRITE_METHODS)
+     + DECISION_WRITE_METHODS + DRIVER_WRITE_METHODS)
 
 
 def _write(method):

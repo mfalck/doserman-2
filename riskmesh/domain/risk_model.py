@@ -233,6 +233,50 @@ def simulate_annual_loss(frequency: Dict[str, Any], impact: Dict[str, Any],
     return np.bincount(trial_index, weights=impacts, minlength=n_trials)
 
 
+def simulate_driven(frequency: Dict[str, Any], severity, n_trials: int, rng: np.random.Generator,
+                    freq_mult: np.ndarray, impact_mult: np.ndarray):
+    """
+    Like simulate_with_consequences, but each simulated year has its own multiplier on the
+    frequency and on the loss per event (from the drivers behind the risk). `severity` is an
+    impact spec or a consequences.Severity. Returns (annual losses, {term key: annual losses}).
+    """
+    validate_frequency(frequency)
+    if frequency["type"] == "poisson":
+        counts = rng.poisson(float(frequency["rate"]) * freq_mult)
+    else:
+        counts = (rng.random(n_trials) < np.minimum(float(frequency["p"]) * freq_mult, 1.0)).astype(np.int64)
+    n = int(counts.sum())
+    trial_index = np.repeat(np.arange(n_trials), counts)
+    scale = impact_mult[trial_index]
+    if hasattr(severity, "sample"):
+        losses, parts = severity.sample(n, rng)
+    else:
+        losses, parts = sample_impact(severity, n, rng), {}
+    total = np.bincount(trial_index, weights=losses * scale, minlength=n_trials)
+    return total, {k: np.bincount(trial_index, weights=v * scale, minlength=n_trials) for k, v in parts.items()}
+
+
+def driver_multipliers(links: List[Dict[str, Any]], shocks: Dict[str, np.ndarray], n_trials: int):
+    """
+    Yearly multipliers on frequency and loss from a risk's drivers. Each link has the driver's
+    sigma (log-scale spread) and the sensitivities f and i; the multiplier of one link is
+    exp(s*sigma*Z - (s*sigma)^2/2), so on average it is 1 (frequency times loss together, too): the
+    drivers' levels are already in the specs, the variation only makes the years differ - together
+    for all risks of a driver.
+    """
+    log_f = np.zeros(n_trials)
+    log_i = np.zeros(n_trials)
+    for link in links:
+        z = shocks[link["id"]]
+        af = float(link.get("f") or 0.0) * float(link["sigma"])
+        ai = float(link.get("i") or 0.0) * float(link["sigma"])
+        log_f += af * z - af * af / 2
+        # frequency and loss move with the same shock; the extra -af*ai keeps E[frequency x loss] = 1,
+        # so the expected annual loss stays the estimate's
+        log_i += ai * z - ai * ai / 2 - af * ai
+    return np.exp(log_f), np.exp(log_i)
+
+
 def simulate_with_consequences(frequency: Dict[str, Any], severity, n_trials: int,
                                rng: np.random.Generator):
     """Like simulate_annual_loss for a consequences.Severity; also returns the annual loss per term key."""
@@ -446,6 +490,13 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
     severities, info = term_index(risks, residual)
     losses = {}
     parts_by_risk: Dict[str, Dict[str, np.ndarray]] = {}
+    shocks: Dict[str, np.ndarray] = {}   # one standard normal per driver and simulated year
+    for risk in risks.values():
+        for link in risk.get("drivers") or []:
+            if link["id"] not in shocks and float(link.get("sigma") or 0) > 0:
+                d_rng = (np.random.default_rng([seed, _stable_key("driver:" + link["id"])])
+                         if seed is not None else shared_rng)
+                shocks[link["id"]] = d_rng.standard_normal(n_trials)
     for risk_id, risk in risks.items():
         freq = (residual and risk.get("residual_frequency")) or risk["frequency"]
         imp = (residual and risk.get("residual_impact")) or risk["impact"]
@@ -454,7 +505,14 @@ def run_simulation(risks: Dict[str, Dict[str, Any]],
         # change the random numbers drawn for the others.
         rng = (np.random.default_rng([seed, _stable_key(risk_id)])
                if seed is not None else shared_rng)
-        if severities[risk_id].has_consequences:
+        links = [link for link in risk.get("drivers") or [] if link["id"] in shocks]
+        if links:
+            fm, im = driver_multipliers(links, shocks, n_trials)
+            sev = severities[risk_id] if severities[risk_id].has_consequences else imp
+            losses[risk_id], parts = simulate_driven(freq, sev, n_trials, rng, fm, im)
+            if parts:
+                parts_by_risk[risk_id] = parts
+        elif severities[risk_id].has_consequences:
             losses[risk_id], parts_by_risk[risk_id] = simulate_with_consequences(
                 freq, severities[risk_id], n_trials, rng)
         else:  # unchanged path, so risks without consequences keep exactly the same random numbers

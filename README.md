@@ -272,6 +272,40 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Drivers: the causes behind the risks
+
+A **driver** is a common cause behind several risks: patch and access
+hygiene, the economic climate, the stability of a hosting platform. A
+**driver effect** says how strongly a risk follows it: a frequency
+sensitivity and a loss sensitivity (elasticities; 1 = in proportion, 0.5
+weaker, 2 stronger).
+
+- The driver's `level` scales the risks it drives (1 = as estimated): with
+  level L and sensitivity s the frequency is multiplied by L**s. Changing a
+  level is how an intervention is tried out, and every report, score and
+  analysis follows it. The stored estimates are not changed.
+- Its `uncertainty` (the multiplier in a 1-in-10 bad year) makes the years
+  differ, together for all risks it drives. The Monte Carlo engine draws one
+  shock per driver and year and scales the frequency and the loss per event of
+  each driven risk by it. It is normalised so the expected annual loss stays the
+  estimate, while the tail gets heavier for a reason you can name. The
+  analytic engine applies the levels only and says so (`report.drivers`).
+
+`GET /api/drivers/overview` lists every driver with the risks it drives and a
+tornado: the total expected loss and P99 with each driver 20% better and 20%
+worse. On the demo the economic climate moves the average most and patch
+hygiene the 1-in-100 year most. `POST /api/drivers/what-if
+{"levels": {"<id>": 0.6}}` shows what a level would do to each risk, the total,
+the appetite and the objectives, without changing anything.
+
+```bash
+riskmesh drivers --what-if "Patch and access hygiene=0.6"
+```
+
+The desktop application and the web app have a *Drivers* page with the
+tornado (expected or 1-in-100), the effects and a what-if slider. The Excel
+workbook has the sheets *Drivers* and *Driver effects*.
+
 ## Decisions: what controls are worth, and what to fund
 
 A control can carry its cost (`implementation_cost` one-off, `annual_cost`,

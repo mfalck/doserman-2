@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from ..domain import risk_model
 from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
                              SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES, Appetite, Benchmark,
-                             BusinessUnit, Control, Correlation, Customer, Incident, Objective, Observation, Risk,
-                             Service, Supplier)
+                             BusinessUnit, Control, Correlation, Customer, Driver, DriverEffect, Incident, Objective,
+                             Observation, Risk, Service, Supplier)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 
@@ -784,6 +784,74 @@ class ObjectiveDialog(BaseDialog):
                 "target_date": self.target.text().strip() or None, "tolerance_loss": _float(self.tol_loss),
                 "tolerance_probability": None if prob is None else prob / 100,
                 "description": self.description.toPlainText().strip() or None}
+
+
+def _spin(lo: float, hi: float, step: float, value: float, decimals: int = 2) -> QDoubleSpinBox:
+    w = QDoubleSpinBox()
+    w.setRange(lo, hi)
+    w.setSingleStep(step)
+    w.setDecimals(decimals)
+    w.setValue(value)
+    return w
+
+
+class DriverDialog(BaseDialog):
+    """A common cause behind several risks."""
+
+    def __init__(self, svc: RiskService, driver: Optional[Driver] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit driver" if driver else "New driver", driver is not None, parent)
+        d = driver
+        self.name = QLineEdit(d.name if d else "")
+        self.level = _spin(0.05, 20, 0.05, d.level if d else 1.0)
+        self.level.setToolTip("1 = as the risks are estimated; 0.7 = 30% better; 1.5 = 50% worse")
+        self.uncertainty = _spin(1.0, 10, 0.05, d.uncertainty if d else 1.0)
+        self.uncertainty.setToolTip("Multiplier in a bad year (1 in 10); 1 = no year-to-year variation")
+        self.owner = _person_combo(svc, d.owner_id if d else None)
+        self.indicator = QLineEdit((d.indicator or "") if d else "")
+        self.indicator.setPlaceholderText("what is measured, e.g. % of critical patches within 14 days")
+        self.description = QPlainTextEdit((d.description or "") if d else "")
+        self.description.setFixedHeight(50)
+        for label, w in (("Name", self.name), ("Level", self.level), ("Bad-year multiplier", self.uncertainty),
+                         ("Owner", self.owner), ("Indicator", self.indicator), ("Description", self.description)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        return {"name": self.name.text(), "level": round(self.level.value(), 4),
+                "uncertainty": round(self.uncertainty.value(), 4), "owner_id": self.owner.currentData(),
+                "indicator": self.indicator.text().strip() or None,
+                "description": self.description.toPlainText().strip() or None}
+
+
+class DriverEffectDialog(BaseDialog):
+    """How strongly a driver moves a risk."""
+
+    def __init__(self, svc: RiskService, effect: Optional[DriverEffect] = None, driver_id: Optional[str] = None,
+                 parent: Optional[QWidget] = None):
+        super().__init__("Edit driver effect" if effect else "New driver effect", effect is not None, parent)
+        e = effect
+        self.driver = QComboBox()
+        for d in svc.list_drivers():
+            self.driver.addItem(d.name, d.id)
+        self.driver.setCurrentIndex(max(0, self.driver.findData(e.driver_id if e else driver_id)))
+        self.risk = _risk_combo(svc, e.risk_id if e else None)
+        self.driver.setEnabled(e is None)
+        self.risk.setEnabled(e is None)
+        self.freq = _spin(0, 3, 0.1, e.frequency_sensitivity if e else 1.0, 1)
+        self.impact = _spin(0, 3, 0.1, e.impact_sensitivity if e else 0.0, 1)
+        hint = QLabel("Sensitivity 1: the risk moves in proportion to the driver; 0.5 weaker, 2 stronger, 0 not at all.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #64748b")
+        self.rationale = QLineEdit((e.rationale or "") if e else "")
+        for label, w in (("Driver", self.driver), ("Risk", self.risk), ("Frequency sensitivity", self.freq),
+                         ("Loss sensitivity", self.impact), ("", hint), ("Rationale", self.rationale)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        return {"driver_id": self.driver.currentData(), "risk_id": self.risk.currentData(),
+                "frequency_sensitivity": round(self.freq.value(), 2), "impact_sensitivity": round(self.impact.value(), 2),
+                "rationale": self.rationale.text().strip() or None}
 
 
 class LoginDialog(QDialog):

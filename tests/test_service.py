@@ -109,7 +109,7 @@ def test_export_import_roundtrip_preserves_ids_and_results(svc):
     before = svc.simulation_report(n_trials=1_000, seed=9)["total"]
     svc.repo.clear()
     counts = svc.import_data(data)
-    assert counts == {"person": 5, "business_unit": 7, "asset": 4, "supplier": 3, "service": 3, "customer": 3, "objective": 4, "risk": 7, "correlation": 3, "appetite": 2, "incident": 2, "observation": 9, "benchmark": 2,
+    assert counts == {"person": 5, "business_unit": 7, "asset": 4, "supplier": 3, "service": 3, "customer": 3, "objective": 4, "risk": 7, "driver": 3, "driver_effect": 5, "correlation": 3, "appetite": 2, "incident": 2, "observation": 9, "benchmark": 2,
                       "control": 9, "risk_event": 3, "control_event": 4}
     assert svc.simulation_report(n_trials=1_000, seed=9)["total"] == before
 

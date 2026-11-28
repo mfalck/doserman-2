@@ -137,6 +137,22 @@ def seed_demo(svc: RiskService) -> None:
     svc.update_risk(churn.id, objective_ids=[growth.id])
     svc.update_risk(breach.id, objective_ids=[growth.id])
 
+    # Common causes: change a driver's level to see what an intervention would do (Drivers page)
+    hygiene = svc.create_driver("Patch and access hygiene", owner_id=jane.id, uncertainty=1.4,
+                                indicator="% of critical patches installed within 14 days",
+                                description="How quickly we patch and how tightly we control privileged access")
+    svc.create_driver_effect(hygiene.id, ransomware.id, frequency_sensitivity=1.2,
+                             rationale="Most ransomware enters through unpatched systems or stolen credentials")
+    svc.create_driver_effect(hygiene.id, breach.id, frequency_sensitivity=1.0)
+    economy = svc.create_driver("Economic climate", owner_id=john.id, uncertainty=1.5,
+                                indicator="Customer budget growth; business confidence index",
+                                description="A downturn makes customers leave and fraudsters more active")
+    svc.create_driver_effect(economy.id, churn.id, frequency_sensitivity=1.5)
+    svc.create_driver_effect(economy.id, fraud.id, frequency_sensitivity=0.8, impact_sensitivity=0.5)
+    platform = svc.create_driver("Hosting platform stability", owner_id=jane.id, uncertainty=1.3,
+                                 indicator="Unplanned downtime minutes per month at Nordic Cloud")
+    svc.create_driver_effect(platform.id, outage.id, frequency_sensitivity=1.0, impact_sensitivity=0.5)
+
     # Bad years that tend to come together, and what the board accepts
     svc.create_correlation(ransomware.id, breach.id, 0.5,
                            rationale="Same attackers and the same weaknesses in patching and access control")

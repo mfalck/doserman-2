@@ -367,6 +367,59 @@ class NotificationSent(_In):
 ObjectiveCriticality = Literal["MISSION_CRITICAL", "IMPORTANT", "SUPPORTING"]
 
 
+class DriverCreate(_In):
+    name: str
+    description: Optional[str] = None
+    owner_id: Optional[str] = None
+    level: float = Field(1.0, ge=0.05, le=20)
+    uncertainty: float = Field(1.0, ge=1, le=10)
+    indicator: Optional[str] = None
+
+
+class DriverUpdate(_In):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    owner_id: Optional[str] = None
+    level: Optional[float] = Field(None, ge=0.05, le=20)
+    uncertainty: Optional[float] = Field(None, ge=1, le=10)
+    indicator: Optional[str] = None
+
+
+class DriverOut(_Out):
+    name: str
+    description: Optional[str] = None
+    owner_id: Optional[str] = None
+    level: float = 1.0
+    uncertainty: float = 1.0
+    indicator: Optional[str] = None
+
+
+class DriverEffectCreate(_In):
+    driver_id: str
+    risk_id: str
+    frequency_sensitivity: float = Field(1.0, ge=0, le=3)
+    impact_sensitivity: float = Field(0.0, ge=0, le=3)
+    rationale: Optional[str] = None
+
+
+class DriverEffectUpdate(_In):
+    frequency_sensitivity: Optional[float] = Field(None, ge=0, le=3)
+    impact_sensitivity: Optional[float] = Field(None, ge=0, le=3)
+    rationale: Optional[str] = None
+
+
+class DriverEffectOut(_Out):
+    driver_id: str
+    risk_id: str
+    frequency_sensitivity: float = 1.0
+    impact_sensitivity: float = 0.0
+    rationale: Optional[str] = None
+
+
+class WhatIf(_In):
+    levels: Dict[str, float] = Field(..., description="driver id -> level to try")
+
+
 class ObjectiveCreate(_In):
     name: str
     criticality: ObjectiveCriticality = "IMPORTANT"

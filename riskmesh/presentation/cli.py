@@ -340,6 +340,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
+    drvp = sub.add_parser("drivers", help="common causes behind risks, and what changing them would do")
+    drvp.add_argument("--what-if", nargs="+", metavar="NAME=LEVEL",
+                      help='try driver levels, e.g. --what-if "Patch and access hygiene=0.6"')
     decp = sub.add_parser("decisions", help="what each control is worth, and what to fund within a budget")
     decp.add_argument("--budget", type=float, help="show the investment plan for this first-year budget")
     calp = sub.add_parser("calibrate", help="what observed events and benchmarks say about the estimates")
@@ -587,6 +590,38 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "drivers":
+        o = svc.driver_overview()
+        print(f"{'Driver':<32}{'Level':>7}{'Drives EAL':>14}{'EAL +-20%':>13}{'P99 +-20%':>13}")
+        for d in o["drivers"]:
+            print(f"{d['name'][:31]:<32}{d['level']:>7.2f}{money(d['driven_eal'])[-14:]:>14}"
+                  f"{money(d['swing_mean'])[-13:]:>13}{money(d['swing_p99'])[-13:]:>13}")
+            for e in d["effects"]:
+                print(f"    {e['risk']:<36} frequency x{e['frequency_sensitivity']:g}"
+                      + (f", loss x{e['impact_sensitivity']:g}" if e["impact_sensitivity"] else ""))
+        if o["risks_without_driver"]:
+            print("\nRisks without a driver: " + ", ".join(o["risks_without_driver"]))
+        if args.what_if:
+            by_name = {d.name.lower(): d for d in svc.list_drivers()}
+            levels = {}
+            for item in args.what_if:
+                name, _, value = item.rpartition("=")
+                d = by_name.get(name.strip().lower())
+                if not d:
+                    print(f"Error: no driver called {name!r}", file=sys.stderr)
+                    return 1
+                levels[d.id] = float(value.replace(",", "."))
+            w = svc.driver_what_if(levels)
+            print("\nWhat if " + ", ".join(f"{v['name']} {v['from']:g} -> {v['to']:g}" for v in w["levels"].values()))
+            for r in w["risks"]:
+                print(f"  {r['name']:<32}{money(r['before'])} ->{money(r['after'])}")
+            if "before" in w:
+                b, a = w["before"], w["after"]
+                print(f"  total expected loss {money(b['mean']).strip()} -> {money(a['mean']).strip()}, "
+                      f"P99 {money(b['p99']).strip()} -> {money(a['p99']).strip()}")
+                for ob, oa in zip(b["objectives"], a["objectives"]):
+                    if ob["breached"] != oa["breached"]:
+                        print(f"  objective '{oa['name']}' {'back within' if not oa['breached'] else 'now outside'} tolerance")
     elif args.command == "decisions":
         v = svc.control_values()
         print(f"{'Control':<38}{'Status':<13}{'Loss removed':>13}{'Cost/yr':>11}{'Net':>12}{'P99 effect':>13}")

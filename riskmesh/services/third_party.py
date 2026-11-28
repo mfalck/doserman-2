@@ -142,7 +142,8 @@ class ThirdParty:
             for sub in s.subcontractor_ids:
                 contractors_of[sub].add(s.id)
         return {"suppliers": suppliers, "services": services, "customers": customers, "risks": risks,
-                "customers_of": customers_of, "direct_services": direct_services, "contractors_of": contractors_of}
+                "customers_of": customers_of, "direct_services": direct_services, "contractors_of": contractors_of,
+                "driver_links": self._driver_links()}
 
     @staticmethod
     def _chain(supplier_ids, suppliers: Dict[str, Supplier]) -> Dict[str, int]:
@@ -412,13 +413,17 @@ class ThirdParty:
     def engine_risk(self, risk: Risk, g: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """The risk as the calculation engines see it: its fields plus resolved consequences."""
         d = risk.to_dict()
-        terms = self.consequence_terms(risk, g)
-        if terms:
-            d["consequences"] = {"terms": terms}
+        if risk.outage_hours or risk.residual_outage_hours:
+            terms = self.consequence_terms(risk, g if g and "services" in g else None)
+            if terms:
+                d["consequences"] = {"terms": terms}
+        links = (g["driver_links"] if g and "driver_links" in g else self._driver_links()).get(risk.id)
+        if links:
+            d = self._apply_driver_levels(d, links)
         return d
 
     def engine_risks(self, risks: List[Risk]) -> Dict[str, Dict[str, Any]]:
-        g = self._graph() if any(r.outage_hours or r.residual_outage_hours for r in risks) else None
+        g = self._graph() if any(r.outage_hours or r.residual_outage_hours for r in risks) else             {"driver_links": self._driver_links()}
         return {r.id: self.engine_risk(r, g) for r in risks}
 
     def risk_severity(self, risk: Risk, residual: bool, g: Optional[Dict[str, Any]] = None):

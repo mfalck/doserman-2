@@ -280,3 +280,21 @@ def test_control_dialog_keeps_costs_and_effect(window):
     v = ControlDialog(window.svc, c).values()
     assert (v["implementation_cost"], v["annual_cost"], v["frequency_reduction"], v["impact_reduction"]) == \
         (c.implementation_cost, c.annual_cost, c.frequency_reduction, c.impact_reduction)
+
+
+def test_drivers_page_what_if_and_dialogs(window):
+    from riskmesh.gui.dialogs import DriverDialog, DriverEffectDialog
+    page = window.pages[window.PAGES.index("Drivers")]
+    window.nav.setCurrentRow(window.PAGES.index("Drivers"))
+    names = [page.table.item(r, 0).text() for r in range(page.table.rowCount())]
+    page.table.selectRow(names.index("Patch and access hygiene"))
+    assert page.effects.rowCount() == 2
+    page.try_level.setValue(0.6)
+    page.what_if()
+    assert "Ransomware attack" in page.result.toPlainText()
+    d = next(d for d in window.svc.list_drivers() if d.name == "Economic climate")
+    v = DriverDialog(window.svc, d).values()
+    assert (v["level"], v["uncertainty"]) == (d.level, d.uncertainty)
+    e = window.svc.list_driver_effects(driver_id=d.id)[0]
+    v = DriverEffectDialog(window.svc, e).values()
+    assert (v["risk_id"], v["frequency_sensitivity"]) == (e.risk_id, e.frequency_sensitivity)

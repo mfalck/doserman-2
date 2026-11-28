@@ -66,9 +66,9 @@ def required_role(method: str, path: str, query: Dict[str, str]) -> str:
         return "admin" if query.get("replace", "false").lower() == "true" else "editor"
     if method in ("GET", "HEAD", "OPTIONS"):
         return "viewer"
-    if path in ("/api/simulations", "/api/simulations/compare") or (
+    if path in ("/api/simulations", "/api/simulations/compare", "/api/drivers/what-if") or (
             path.startswith("/api/runs/") and path.endswith("/reproduce")):
-        return "viewer"  # running an analysis does not change risk data
+        return "viewer"  # running an analysis (or a what-if) does not change risk data
     return "editor"
 
 
@@ -680,6 +680,50 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def create_control(body: s.ControlCreate):
         d = body.model_dump()
         return svc.create_control(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
+
+    @api.get("/drivers/overview", tags=["drivers"])
+    async def driver_overview():
+        """Drivers, the risks they drive and a tornado: total expected loss and P99 at -20% / +20%."""
+        return svc.driver_overview()
+
+    @api.post("/drivers/what-if", tags=["drivers"])
+    async def driver_what_if(body: s.WhatIf):
+        """What setting drivers to these levels would do to the risks, the total, appetite and objectives."""
+        return svc.driver_what_if(body.levels)
+
+    @api.get("/drivers", response_model=List[s.DriverOut], tags=["drivers"])
+    async def list_drivers():
+        return [x.to_dict() for x in svc.list_drivers()]
+
+    @api.post("/drivers", response_model=s.DriverOut, status_code=201, tags=["drivers"])
+    async def create_driver(body: s.DriverCreate):
+        d = body.model_dump()
+        return svc.create_driver(d.pop("name"), **d).to_dict()
+
+    @api.patch("/drivers/{driver_id}", response_model=s.DriverOut, tags=["drivers"])
+    async def update_driver(driver_id: str, body: s.DriverUpdate):
+        return svc.update_driver(driver_id, **_changes(body)).to_dict()
+
+    @api.delete("/drivers/{driver_id}", status_code=204, tags=["drivers"])
+    async def delete_driver(driver_id: str):
+        svc.delete_driver(driver_id)
+
+    @api.get("/driver-effects", response_model=List[s.DriverEffectOut], tags=["drivers"])
+    async def list_driver_effects(driver_id: Optional[str] = None, risk_id: Optional[str] = None):
+        return [x.to_dict() for x in svc.list_driver_effects(driver_id, risk_id)]
+
+    @api.post("/driver-effects", response_model=s.DriverEffectOut, status_code=201, tags=["drivers"])
+    async def create_driver_effect(body: s.DriverEffectCreate):
+        d = body.model_dump()
+        return svc.create_driver_effect(d.pop("driver_id"), d.pop("risk_id"), **d).to_dict()
+
+    @api.patch("/driver-effects/{effect_id}", response_model=s.DriverEffectOut, tags=["drivers"])
+    async def update_driver_effect(effect_id: str, body: s.DriverEffectUpdate):
+        return svc.update_driver_effect(effect_id, **_changes(body)).to_dict()
+
+    @api.delete("/driver-effects/{effect_id}", status_code=204, tags=["drivers"])
+    async def delete_driver_effect(effect_id: str):
+        svc.delete_driver_effect(effect_id)
 
     @api.get("/decisions/controls", tags=["decisions"])
     async def control_values(tail: bool = True):

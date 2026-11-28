@@ -87,6 +87,8 @@ def test_access_policy():
     assert required_role("GET", "/api/risks", {}) == "viewer"
     assert required_role("POST", "/api/risks", {}) == "editor"
     assert required_role("POST", "/api/simulations/compare", {}) == "viewer"
+    assert required_role("POST", "/api/drivers/what-if", {}) == "viewer"
+    assert required_role("POST", "/api/drivers", {}) == "editor"
     assert required_role("PATCH", "/api/runs/x", {}) == "editor"
     assert required_role("POST", "/api/import", {}) == "admin"
     assert required_role("POST", "/api/import", {"replace": "false"}) == "editor"
