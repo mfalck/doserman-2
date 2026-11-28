@@ -23,6 +23,7 @@ from ..domain import audit
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import BusinessUnit, Control, PeriodFact, ReportingPeriod, RiskEvent
 from ..domain.periods import parse_period
+from .core import ServiceCore
 
 FACT_METRICS = ("risk_count", "high_risk_count", "eal_inherent", "eal_residual", "p50", "p90", "p99", "tvar99",
                 "p99_inherent", "score_inherent", "score_residual", "controls", "control_effectiveness",
@@ -41,7 +42,7 @@ def _avg(values: List[float]) -> Optional[float]:
     return sum(values) / len(values) if values else None
 
 
-class Reporting:
+class Reporting(ServiceCore):
 
     # -- periods -------------------------------------------------------------------
 

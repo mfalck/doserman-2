@@ -22,6 +22,7 @@ from ..domain import decisions as dec
 from ..domain.consequences import Severity
 from ..domain.errors import ConflictError, ValidationError
 from ..domain.models import BusinessUnit, Driver, DriverEffect, Risk
+from .core import ServiceCore
 
 Z90 = 1.2815515655446004
 SWING = 0.2   # the tornado moves each driver 20% down and up
@@ -31,7 +32,7 @@ def sigma_of(uncertainty: float) -> float:
     return math.log(max(float(uncertainty), 1.0)) / Z90
 
 
-class Drivers:
+class Drivers(ServiceCore):
     """Mixin for RiskService."""
 
     def _validate_driver(self, e) -> bool:

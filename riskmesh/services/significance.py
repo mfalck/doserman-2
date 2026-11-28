@@ -25,6 +25,7 @@ import numpy as np
 from ..domain.consequences import Severity, term_value
 from ..domain.models import Risk
 from ..domain.risk_model import sample_impact
+from .core import ServiceCore
 
 SAMPLES = 20_000
 
@@ -62,7 +63,7 @@ def per_year(freq: Dict[str, Any], share: float):
     return m, 1.0 - math.exp(-m)
 
 
-class Significance:
+class Significance(ServiceCore):
     """Mixin for RiskService (uses engine_risks and the configured thresholds)."""
 
     significant_loss: Optional[float] = None

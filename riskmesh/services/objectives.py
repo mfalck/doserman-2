@@ -13,11 +13,12 @@ from typing import Any, Dict, List, Optional
 
 from ..domain.errors import ValidationError
 from ..domain.models import OBJECTIVE_CRITICALITIES, Objective
+from .core import ServiceCore
 
 CHECK_TRIALS = 20_000
 
 
-class Objectives:
+class Objectives(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo and ThirdParty._graph)."""
 
     def _validate_objective(self, e) -> bool:

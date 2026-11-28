@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..domain.errors import AuthenticationError, ConflictError, PermissionDenied, ValidationError
 from ..domain.models import ROLES, ApiToken, User
+from .core import ServiceCore
 
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 14, 8, 1
 MIN_PASSWORD_LENGTH = 10
@@ -57,7 +58,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class UserAdmin:
+class UserAdmin(ServiceCore):
     """Mixin for RiskService. Uses its repo, _save/_remove/_audit and the write transaction."""
 
     # -- validation ------------------------------------------------------------

@@ -17,9 +17,10 @@ from ..domain import analytic
 from ..domain import decisions as dec
 from ..domain.errors import ValidationError
 from ..domain.models import BusinessUnit, Driver, Risk, Scenario
+from .core import ServiceCore
 
 
-class Scenarios:
+class Scenarios(ServiceCore):
     """Mixin for RiskService (uses Drivers._state_at/_eal and ThirdParty.stress_test)."""
 
     def _validate_scenario(self, e) -> bool:

@@ -23,6 +23,7 @@ from ..domain import decisions as dec
 from ..domain.consequences import Severity
 from ..domain.errors import ValidationError
 from ..domain.models import BusinessUnit, Control, Driver, Risk
+from .core import ServiceCore
 
 ACTIVE = ("PLANNED", "IN_PROGRESS", "IMPLEMENTED")
 CANDIDATES = ("PLANNED", "IN_PROGRESS")
@@ -38,7 +39,7 @@ def _total_p99(risks: Dict[str, Dict[str, Any]]) -> float:
     return dist.quantile(0.99)
 
 
-class Decisions:
+class Decisions(ServiceCore):
     """Mixin for RiskService."""
 
     def _validate_control_economics(self, c: Control) -> None:

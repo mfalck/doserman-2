@@ -23,11 +23,12 @@ from typing import Any, Dict, List, Optional, Sequence
 from ..domain import calibration as cal
 from ..domain.errors import ValidationError
 from ..domain.models import Benchmark, BusinessUnit, Observation, Risk, Supplier
+from .core import ServiceCore
 
 MAX_POINTS_PER_ROW = 1000
 
 
-class Evidence:
+class Evidence(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo/_descendant_ids/update_risk)."""
 
     # -- validation (called from RiskService._validate) --------------------------------

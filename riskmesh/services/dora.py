@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from ..domain.errors import ValidationError
 from ..domain.models import BusinessUnit, Customer, Incident
+from .core import ServiceCore
 
 LEI_PATTERN = re.compile(r"^[A-Z0-9]{18}[0-9]{2}$")
 
@@ -30,7 +31,7 @@ def lei_is_valid(lei: str) -> bool:
     return int("".join(str(int(ch, 36)) for ch in lei)) % 97 == 1
 
 
-class DoraExtract:
+class DoraExtract(ServiceCore):
     """Mixin for RiskService (uses ThirdParty._graph/_chain and repo)."""
 
     @staticmethod

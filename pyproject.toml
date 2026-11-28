@@ -80,11 +80,6 @@ check_untyped_defs = false
 # the GUI is checked by its smoke tests; Qt's stubs are noisy
 exclude = ["riskmesh/gui/"]
 
-[[tool.mypy.overrides]]
-# the RiskService mixins use attributes of the class they are mixed into (self.repo, self._create ...);
-# mypy cannot see that until the service is split into explicit collaborators
-module = "riskmesh.services.*"
-disable_error_code = ["attr-defined"]
 
 [[tool.mypy.overrides]]
 module = "riskmesh.gui.*"

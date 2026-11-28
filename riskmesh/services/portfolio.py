@@ -7,11 +7,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..domain.errors import ConflictError, ValidationError
 from ..domain.models import Appetite, Correlation
+from .core import ServiceCore
 
 MAX_COEFFICIENT = 0.99
 
 
-class Portfolio:
+class Portfolio(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo)."""
 
     # -- validation (called from RiskService._validate) --------------------------------

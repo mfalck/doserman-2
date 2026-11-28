@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from ..domain.errors import ValidationError
 from ..domain.models import INCIDENT_STATUSES, Customer, Incident
+from .core import ServiceCore
 
 DUE_SOON_HOURS = 12
 NIS2_STAGES = (("nis2:early_warning", "NIS2 early warning", 24),
@@ -55,7 +56,7 @@ def add_month(t: datetime) -> datetime:
     return t.replace(year=year, month=month, day=min(t.day, calendar.monthrange(year, month)[1]))
 
 
-class Incidents:
+class Incidents(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo and ThirdParty._graph)."""
 
     # -- validation (called from RiskService._validate) --------------------------------

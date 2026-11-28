@@ -7,9 +7,10 @@ from typing import Any, Dict, List, Optional
 from ..domain import anchoring
 from ..domain.errors import ValidationError
 from ..domain.models import AuditAnchor, AuditEntry
+from .core import ServiceCore
 
 
-class AnchorAdmin:
+class AnchorAdmin(ServiceCore):
     anchor_key_path: Optional[str] = None   # set from [audit] signing_key
     tsa_url: Optional[str] = None           # set from [audit] tsa_url
     anchor_on_period_close: bool = True

@@ -61,6 +61,7 @@ from ..domain.models import (
     new_id,
 )
 from ..domain.risk_model import negbin_from_range, rate_p90_of
+from .core import ServiceCore
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -391,7 +392,7 @@ def _split(v: Any, comma: bool = False) -> List[str]:
     return [x.strip() for x in s.split(";") if x.strip()]
 
 
-class ExcelExchange:
+class ExcelExchange(ServiceCore):
     """Mixin for RiskService."""
 
     # -- export ------------------------------------------------------------------------------------

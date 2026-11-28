@@ -27,11 +27,12 @@ from ..domain.models import (
     Service,
     Supplier,
 )
+from .core import ServiceCore
 
 CONTRACT_WARNING_DAYS = 90
 
 
-class ThirdParty:
+class ThirdParty(ServiceCore):
     """Mixin for RiskService (uses _create/_update/_delete/_require/repo)."""
 
     # -- validation (called from RiskService._validate) --------------------------------

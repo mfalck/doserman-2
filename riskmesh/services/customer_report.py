@@ -22,11 +22,12 @@ from typing import Any, Dict, List
 
 from ..domain import audit
 from ..domain.models import Incident
+from .core import ServiceCore
 
 REPORT_VERSION = "1"
 
 
-class CustomerReport:
+class CustomerReport(ServiceCore):
     """Mixin for RiskService."""
 
     def customer_report(self, customer_id: str) -> Dict[str, Any]:
