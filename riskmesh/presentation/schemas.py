@@ -136,6 +136,7 @@ class RiskCreate(_In):
                                          description="duration of one event's outage, in hours")
     residual_outage_hours: Optional[Spec] = None
     evidence_categories: List[str] = []
+    objective_ids: List[str] = []
 
 
 class RiskUpdate(_In):
@@ -154,6 +155,7 @@ class RiskUpdate(_In):
     outage_hours: Optional[Spec] = None
     residual_outage_hours: Optional[Spec] = None
     evidence_categories: Optional[List[str]] = None
+    objective_ids: Optional[List[str]] = None
 
 
 class ScoreOut(BaseModel):
@@ -189,6 +191,7 @@ class RiskOut(_Out):
     scores: RiskScoresOut
     control_ids: List[str] = []
     evidence_categories: List[str] = []
+    objective_ids: List[str] = []
 
 
 # -- Controls ---------------------------------------------------------------
@@ -344,6 +347,48 @@ class IncidentOut(_Out):
 class NotificationSent(_In):
     key: str = Field(..., description="e.g. nis2:early_warning or customer:<id>")
     sent_at: Optional[str] = Field(None, description="default now; empty string undoes it")
+
+
+ObjectiveCriticality = Literal["MISSION_CRITICAL", "IMPORTANT", "SUPPORTING"]
+
+
+class ObjectiveCreate(_In):
+    name: str
+    criticality: ObjectiveCriticality = "IMPORTANT"
+    description: Optional[str] = None
+    business_unit_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    service_ids: List[str] = []
+    kpi: Optional[str] = None
+    target_date: Optional[str] = None
+    tolerance_loss: Optional[float] = Field(None, ge=0)
+    tolerance_probability: Optional[float] = Field(None, gt=0, lt=1)
+
+
+class ObjectiveUpdate(_In):
+    name: Optional[str] = None
+    criticality: Optional[ObjectiveCriticality] = None
+    description: Optional[str] = None
+    business_unit_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    service_ids: Optional[List[str]] = None
+    kpi: Optional[str] = None
+    target_date: Optional[str] = None
+    tolerance_loss: Optional[float] = Field(None, ge=0)
+    tolerance_probability: Optional[float] = Field(None, gt=0, lt=1)
+
+
+class ObjectiveOut(_Out):
+    name: str
+    criticality: str
+    description: Optional[str] = None
+    business_unit_id: Optional[str] = None
+    owner_id: Optional[str] = None
+    service_ids: List[str] = []
+    kpi: Optional[str] = None
+    target_date: Optional[str] = None
+    tolerance_loss: Optional[float] = None
+    tolerance_probability: Optional[float] = None
 
 
 class ObservationCreate(_In):

@@ -190,7 +190,7 @@ def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str
             residual: bool = True, n_points: int = DEFAULT_POINTS,
             percentiles: Iterable[float] = DEFAULT_PERCENTILES,
             appetites: Optional[List[Dict[str, Any]]] = None,
-            correlated: int = 0) -> Dict[str, Any]:
+            correlated: int = 0, objectives: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """
     Same report structure as the Monte Carlo SimulationResult.report(),
     plus `engine` and grid information. The analytic engine adds up
@@ -266,4 +266,12 @@ def analyse(risks: Dict[str, Dict[str, Any]], business_units: Dict[str, Dict[str
                            if uid else risks.keys())
             report["appetite"].append(evaluate(a, dist.prob_exceed, dist.statistics(percentiles),
                                                dist.exceedance_curve()))
+    if objectives:
+        from .objectives import evaluate as evaluate_objective
+        report["objectives"] = []
+        for o in objectives:
+            ids = [rid for rid in o["risk_ids"] if rid in risks]
+            dist = dist_of(ids)
+            report["objectives"].append(evaluate_objective(o, dist.statistics(percentiles), dist.prob_exceed,
+                                                           dist.exceedance_curve(), len(ids)))
     return report

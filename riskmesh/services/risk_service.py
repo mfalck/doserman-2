@@ -29,6 +29,7 @@ from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .dora import DoraExtract
 from .evidence import EVIDENCE_WRITE_METHODS, Evidence
 from .excel import ExcelExchange
+from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
 from .incidents import INCIDENT_WRITE_METHODS, Incidents
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
 from .reporting import REPORTING_WRITE_METHODS, Reporting
@@ -62,7 +63,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
-                  ExcelExchange):
+                  Objectives, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):
@@ -380,6 +381,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             e.asset_ids = list(dict.fromkeys(e.asset_ids or []))
             e.service_ids = list(dict.fromkeys(e.service_ids or []))
             e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
+            e.objective_ids = list(dict.fromkeys(e.objective_ids or []))
             e.evidence_categories = list(dict.fromkeys(str(c).strip() for c in e.evidence_categories or []
                                                        if str(c).strip()))
             try:
@@ -415,7 +417,8 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             self._enum(e.event_type, CONTROL_EVENT_TYPES, "event_type")
             self._enum(e.status, CONTROL_EVENT_STATUSES, "status")
             self._date(e.date, "date")
-        elif not (self._validate_portfolio(e) or self._validate_incident(e) or self._validate_evidence(e)):
+        elif not (self._validate_portfolio(e) or self._validate_incident(e) or self._validate_evidence(e)
+                     or self._validate_objective(e)):
             self._validate_third_party(e)
         # Unit name uniqueness and hierarchy cycles need the repository:
         # see _check_unit_rules and import_data.
@@ -481,6 +484,7 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             raise ConflictError("Business unit has child units; delete with cascade=True.")
         for uid in reversed(units):  # children first
             self._delete_unit_appetites(uid)
+            self._delete_unit_objectives(uid)
             self._delete_observations_at("business_unit_id", uid)
             self._delete(BusinessUnit, uid)
         return units
@@ -745,11 +749,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             try:
                 report = analytic.analyse(self.engine_risks(risks), units, residual=residual,
                                           appetites=self.appetites_for(unit_id),
-                                          correlated=len(self.correlation_pairs([r.id for r in risks])))
+                                          correlated=len(self.correlation_pairs([r.id for r in risks])),
+                                          objectives=self.objective_specs([r.id for r in risks]))
             except ValueError as e:
                 raise ValidationError(f"{e} (try engine='monte_carlo')") from e
         elif engine == "monte_carlo":
-            report = self.simulate(n_trials, seed, residual, unit_id).report(appetites=self.appetites_for(unit_id))
+            report = self.simulate(n_trials, seed, residual, unit_id).report(
+                appetites=self.appetites_for(unit_id), objectives=self.objective_specs())
             report["engine"] = "monte_carlo"
         else:
             raise ValidationError("engine must be 'analytic' or 'monte_carlo'.")
@@ -792,6 +798,9 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         appetites = self.appetites_for(unit_id)
         if appetites:
             out["appetites"] = appetites
+        objectives = self.objective_specs([r.id for r in risks])
+        if objectives:
+            out["objectives"] = objectives
         return out
 
     @staticmethod
@@ -1116,7 +1125,7 @@ WRITE_METHODS = (
     "import_data", "label_run", "reset_all", "_store_run",
 ) + (USER_WRITE_METHODS + ANCHOR_WRITE_METHODS + REPORTING_WRITE_METHODS + THIRD_PARTY_WRITE_METHODS
      + PORTFOLIO_WRITE_METHODS + INCIDENT_WRITE_METHODS
-     + EVIDENCE_WRITE_METHODS)
+     + EVIDENCE_WRITE_METHODS + OBJECTIVE_WRITE_METHODS)
 
 
 def _write(method):

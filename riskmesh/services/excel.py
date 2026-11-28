@@ -24,10 +24,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..domain import audit
 from ..domain.errors import ValidationError
-from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES,
+from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES,
                              IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
                              RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             Benchmark, ControlEvent, Correlation, Incident, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+                             Benchmark, ControlEvent, Correlation, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
 
 SEP = "; "
 MAX_ERRORS = 25
@@ -115,6 +115,16 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Penalty after hours", "penalty_grace_hours", "number", width=10),
         Col("Penalty cap", "penalty_cap", "number", width=12),
         Col("Notes", "notes", width=40)]),
+    ("Objectives", Objective, [
+        Col("Name", "name", required=True, width=34),
+        Col("Criticality", "criticality", "enum", values=OBJECTIVE_CRITICALITIES, width=16),
+        Col("Organisation", "business_unit_id", "ref", ref=BusinessUnit, width=22),
+        Col("Owner", "owner_id", "ref", ref=Person, width=20),
+        Col("Delivered through services", "service_ids", "refs", ref=Service, width=28),
+        Col("KPI", "kpi", width=30), Col("Target date", "target_date", "date", width=12),
+        Col("Tolerance: loss above", "tolerance_loss", "number", width=14),
+        Col("Tolerance: max chance per year %", "tolerance_probability", "percent", width=12),
+        Col("Description", "description", width=40)]),
     ("Risks", Risk, [
         Col("Name", "name", required=True, width=28),
         Col("Organisation", "business_unit_id", "ref", required=True, ref=BusinessUnit, width=22),
@@ -131,6 +141,7 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Services", "service_ids", "refs", ref=Service, width=26),
         Col("Suppliers", "supplier_ids", "refs", ref=Supplier, width=22),
         Col("Evidence categories", "evidence_categories", "list", width=24),
+        Col("Threatens objectives", "objective_ids", "refs", ref=Objective, width=28),
         Col("Description", "description", width=40)]),
     ("Correlations", Correlation, [
         Col("Risk A", "risk_a_id", "ref", required=True, ref=Risk, width=28),
@@ -211,6 +222,8 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Objectives: what we must achieve. Risks threaten one when they name it (Threatens objectives) or can",
+    "    disrupt a service it is delivered through. Tolerance: at most this chance per year of losing more.",
     "- Observations: events that happened, one row per event or a count (Count) with their total Loss.",
     "    Fill Organisation or Supplier for that level; leave both empty for the whole group.",
     "    They count for risks whose Evidence categories (or category) include the observation's Category.",
@@ -412,6 +425,8 @@ class ExcelExchange:
             return v.get(c.note) if v and v.get("dist") in SPEC_FIELDS else None
         if c.kind == "maybe":
             return None if v is None else ("yes" if v else "no")
+        if c.kind == "percent":
+            return None if v is None else round(v * 100, 6)
         if c.kind == "json":
             return json.dumps(v, ensure_ascii=False) if v else None
         if c.kind == "time":
@@ -614,6 +629,9 @@ class ExcelExchange:
             d[c.field] = _date(raw)
         elif c.kind == "points":
             d[c.field] = _points(raw)
+        elif c.kind == "percent":
+            v = _number(str(raw).replace("%", "") if isinstance(raw, str) else raw)
+            d[c.field] = None if v is None else v / 100
         elif c.kind == "maybe":
             t = _text(raw)
             d[c.field] = None if t is None else _bool(t)

@@ -123,6 +123,20 @@ def seed_demo(svc: RiskService) -> None:
         category="hazard", asset_ids=[office.id],
     )
 
+    # What we must achieve, and which risks threaten it (through the services that deliver it, or directly)
+    svc.create_objective("Citizen portal available to our municipal customers", criticality="MISSION_CRITICAL",
+                         service_ids=[portal.id], owner_id=david.id, kpi="Availability at least 99.9% per month",
+                         tolerance_loss=1_000_000, tolerance_probability=0.05)
+    svc.create_objective("Meter data delivered to the energy market on time", criticality="MISSION_CRITICAL",
+                         service_ids=[metering.id], owner_id=jane.id, kpi="99.5% of daily deliveries before 10:00",
+                         tolerance_loss=750_000, tolerance_probability=0.10)
+    svc.create_objective("Correct and timely payroll", criticality="IMPORTANT", service_ids=[payroll.id],
+                         owner_id=john.id)
+    growth = svc.create_objective("Grow sales 10% in 2027", criticality="IMPORTANT", business_unit_id=sales.id,
+                                  owner_id=robert.id, kpi="Revenue growth", target_date="2027-12-31")
+    svc.update_risk(churn.id, objective_ids=[growth.id])
+    svc.update_risk(breach.id, objective_ids=[growth.id])
+
     # Bad years that tend to come together, and what the board accepts
     svc.create_correlation(ransomware.id, breach.id, 0.5,
                            rationale="Same attackers and the same weaknesses in patching and access control")

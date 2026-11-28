@@ -331,7 +331,8 @@ class SimulationResult:
         return lambda x: float((losses > x).mean())
 
     def report(self, percentiles: Iterable[float] = DEFAULT_PERCENTILES,
-               appetites: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+               appetites: Optional[List[Dict[str, Any]]] = None,
+               objectives: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """JSON-serialisable summary of the whole simulation (with appetites: whether each is kept)."""
         percentiles = tuple(percentiles)
         per_risk = []
@@ -382,6 +383,15 @@ class SimulationResult:
                 losses = self.unit_losses(a["business_unit_id"]) if a.get("business_unit_id") else total
                 report["appetite"].append(evaluate(a, self.prob_exceed(losses), loss_statistics(losses, percentiles),
                                                    loss_exceedance_curve(losses)))
+        if objectives:
+            from .objectives import evaluate as evaluate_objective
+            report["objectives"] = []
+            for o in objectives:
+                ids = [rid for rid in o["risk_ids"] if rid in self.risk_losses]
+                losses = sum((self.risk_losses[rid] for rid in ids), np.zeros(self.n_trials))
+                report["objectives"].append(evaluate_objective(
+                    o, loss_statistics(losses, percentiles), self.prob_exceed(losses),
+                    loss_exceedance_curve(losses), len(ids)))
         return report
 
 

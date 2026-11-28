@@ -283,6 +283,7 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
             "service_criticalities": m.SERVICE_CRITICALITIES,
             "regulations": m.REGULATIONS,
             "incident_statuses": m.INCIDENT_STATUSES,
+            "objective_criticalities": m.OBJECTIVE_CRITICALITIES,
             "control_types": m.CONTROL_TYPES,
             "implementation_statuses": m.IMPLEMENTATION_STATUSES,
             "risk_event_types": m.RISK_EVENT_TYPES,
@@ -430,6 +431,28 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @api.delete("/suppliers/{supplier_id}", status_code=204, tags=["third parties"])
     async def delete_supplier(supplier_id: str):
         svc.delete_supplier(supplier_id)
+
+    @api.get("/objectives/overview", tags=["objectives"])
+    async def objective_overview(residual: bool = True):
+        """Every objective with the risks that threaten it, the risk to it and review findings."""
+        return svc.objective_overview(residual)
+
+    @api.get("/objectives", response_model=List[s.ObjectiveOut], tags=["objectives"])
+    async def list_objectives():
+        return [x.to_dict() for x in svc.list_objectives()]
+
+    @api.post("/objectives", response_model=s.ObjectiveOut, status_code=201, tags=["objectives"])
+    async def create_objective(body: s.ObjectiveCreate):
+        d = body.model_dump()
+        return svc.create_objective(d.pop("name"), **d).to_dict()
+
+    @api.patch("/objectives/{objective_id}", response_model=s.ObjectiveOut, tags=["objectives"])
+    async def update_objective(objective_id: str, body: s.ObjectiveUpdate):
+        return svc.update_objective(objective_id, **_changes(body)).to_dict()
+
+    @api.delete("/objectives/{objective_id}", status_code=204, tags=["objectives"])
+    async def delete_objective(objective_id: str):
+        svc.delete_objective(objective_id)
 
     @api.get("/observations", response_model=List[s.ObservationOut], tags=["evidence"])
     async def list_observations(category: Optional[str] = None):

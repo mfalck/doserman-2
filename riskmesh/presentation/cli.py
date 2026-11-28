@@ -339,6 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
+    sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
     calp = sub.add_parser("calibrate", help="what observed events and benchmarks say about the estimates")
     calp.add_argument("risk", nargs="?", help="risk name: show the details (and --apply)")
     calp.add_argument("--expert-years", type=float, default=2.0, help="weight of the estimate in years of data")
@@ -584,6 +585,25 @@ def run(args, svc: RiskService) -> int:
     elif args.command == "period":
         return _period(args, svc)
 
+    elif args.command == "objectives":
+        o = svc.objective_overview()
+        for x in o["objectives"]:
+            f = x["figures"] or {}
+            tol = f.get("tolerance")
+            verdict = "" if not tol else ("  OUTSIDE tolerance" if tol["breached"] else "  within tolerance")
+            print(f"\n{x['name']}  [{x['criticality'].replace('_', ' ').lower()}]{verdict}")
+            if f:
+                print(f"  expected loss {money(f['mean']).strip()}/year, P90 {money(f['p90']).strip()}, "
+                      f"P99 {money(f['p99']).strip()}")
+            if tol:
+                print(f"  {tol['actual']:.1%} chance of losing more than {money(tol['loss']).strip()} "
+                      f"(accepted {tol['probability']:.1%})")
+            for t in x["threats"]:
+                print(f"  - {t['name']}  ({t['via']})")
+        if o["unmapped_risks"]:
+            print("\nRisks that threaten no objective: " + ", ".join(r["name"] for r in o["unmapped_risks"]))
+        for f in o["findings"]:
+            print(f"{f['severity'].upper():<7}{f['objective']}: {f['finding']}")
     elif args.command == "calibrate":
         if not args.risk:
             print(f"{'Risk':<26}{'Events':>7}{'Years':>7}{'Estimate':>10}{'Data':>9}{'Suggested':>11}  Loss")

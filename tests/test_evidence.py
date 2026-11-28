@@ -93,7 +93,7 @@ def test_calibrate_uses_residual_fields_and_apply_records_basis(svc):
 
 
 def test_overview_only_lists_risks_with_evidence(svc):
-    x = build(svc)
+    build(svc)
     assert svc.calibration_overview() == []
     svc.create_benchmark("Public stats", "data breach", events_per_year=0.3, weight=2)
     rows = svc.calibration_overview()

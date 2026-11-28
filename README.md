@@ -272,6 +272,41 @@ same views, the stress test for a selected supplier or service, and the
 outage fields in the risk, service and customer forms. The regulatory findings are a checklist, not legal advice: confirm
 the scope of NIS2 and DORA for your customers with your compliance function.
 
+## Objectives: what the risks threaten
+
+An **objective** is something the organisation must achieve: "keep the citizen
+portal available", "deliver meter data to the market on time", "grow sales
+10%". It has a criticality (`MISSION_CRITICAL`, `IMPORTANT`, `SUPPORTING`), an
+owner, a KPI, optionally a business unit and a target date, the services it is
+delivered through, and a tolerance: at most `tolerance_probability` chance per
+year of losing more than `tolerance_loss` against it.
+
+A risk threatens an objective when
+
+- it names it (`Risk.objective_ids`), or
+- it can disrupt a service the objective is delivered through - directly
+  (`Risk.service_ids`) or because it comes from a supplier behind that service,
+  also as a fourth party (`Risk.supplier_ids`).
+
+Every report (both engines, inherent and residual) then has `objectives[]`:
+per objective the annual loss distribution of exactly the risks that threaten
+it (expected loss, P90, P99, TVaR, the loss exceedance curve; in Monte Carlo
+with the correlations between them) and whether the tolerance is kept. A
+threatening risk counts with its whole loss.
+
+`GET /api/objectives/overview` adds the mapping (which risk, and how) and what
+a review would ask: objectives without mapped risks ("is it really
+risk-free?"), mission-critical objectives without owner, KPI or tolerance,
+objectives outside tolerance, and risks that threaten no objective.
+
+```bash
+riskmesh objectives
+```
+
+The desktop application and the web app have an *Objectives* page, the risk
+forms a "threatens objectives" list, and the Excel workbook an *Objectives*
+sheet plus a "Threatens objectives" column on *Risks*.
+
 ## Data and calibration: observed events and public benchmarks
 
 Estimates are where a risk analysis starts; data is how it stays honest.

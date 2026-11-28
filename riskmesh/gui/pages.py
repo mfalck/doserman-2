@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
 
 from ..services import RiskService
 from .dialogs import (AppetiteDialog, BenchmarkDialog, ControlDialog, CorrelationDialog, CustomerDialog,
-                      IncidentDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog, UnitDialog)
+                      IncidentDialog, ObjectiveDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog,
+                      UnitDialog)
 from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
                       money, title)
 
@@ -1218,6 +1219,98 @@ class IncidentsPage(Page):
             self.changed()
 
 
+class ObjectivesPage(Page):
+    """What we must achieve, the risks that threaten it and the risk to each objective."""
+
+    def __init__(self, svc, on_change):
+        super().__init__(svc, on_change)
+        self.layout_.addWidget(heading("Objectives"))
+        intro = QLabel("A risk threatens an objective when it is mapped to it, or when it can disrupt a service the "
+                       "objective is delivered through (also through a supplier). The risk to an objective is the "
+                       "annual loss of those risks together, with controls.")
+        intro.setWordWrap(True)
+        self.layout_.addWidget(intro)
+        bar = QHBoxLayout()
+        bar.addStretch()
+        for text, slot in (("New", self.add), ("Edit", self.edit), ("Delete", self.delete)):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            self.edit_buttons.append(b)
+            bar.addWidget(b)
+        self.layout_.addLayout(bar)
+        split = QSplitter(Qt.Vertical)
+        self.table = Table(["Objective", "Criticality", "Risks", "Expected loss", "P90", "P99", "Tolerance"],
+                           numeric=[2, 3, 4, 5])
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.table.itemSelectionChanged.connect(self.show_detail)
+        split.addWidget(self.table)
+        bottom = QWidget()
+        bl = QHBoxLayout(bottom)
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        bl.addWidget(self.detail, 3)
+        self.findings = Table(["Finding", "Objective", "Severity"])
+        bl.addWidget(self.findings, 2)
+        split.addWidget(bottom)
+        self.layout_.addWidget(split, 1)
+        self._overview: Dict[str, Any] = {}
+
+    def refresh(self) -> None:
+        self._overview = o = self.svc.objective_overview()
+        rows, colors = [], {}
+        for i, x in enumerate(o["objectives"]):
+            f = x["figures"] or {}
+            tol = f.get("tolerance")
+            if tol:
+                colors[(i, 6)] = "#fecaca" if tol["breached"] else "#bbf7d0"
+            if x["criticality"] == "MISSION_CRITICAL":
+                colors[(i, 1)] = "#fde68a"
+            rows.append([x["name"], title(x["criticality"]), len(x["threats"]), money(f.get("mean")),
+                         money(f.get("p90")), money(f.get("p99")),
+                         "" if not tol else f"{tol['actual']:.1%} > {compact(tol['loss'])} (max {tol['probability']:.1%})"])
+        self.table.fill(rows, keys=[x["id"] for x in o["objectives"]], colors=colors)
+        self.findings.fill([[f["finding"], f["objective"], f["severity"]] for f in o["findings"]],
+                           colors={(i, 2): SEVERITY_COLORS[f["severity"]] for i, f in enumerate(o["findings"])})
+        unmapped = ", ".join(r["name"] for r in o["unmapped_risks"])
+        self.detail.setPlainText(f"Risks that threaten no objective: {unmapped}" if unmapped else "")
+
+    def show_detail(self) -> None:
+        key = self.table.selected_key()
+        x = next((x for x in self._overview.get("objectives", []) if x["id"] == key), None)
+        if not x:
+            return
+        lines = [x["name"], f"KPI: {x['kpi'] or '-'}    target date: {x['target_date'] or '-'}", "", "Threatened by:"]
+        lines += [f"  {t['name']:<32} {t['via']}" for t in x["threats"]] or ["  (no risks mapped)"]
+        self.detail.setPlainText("\n".join(lines))
+
+    def add(self):
+        dialog = ObjectiveDialog(self.svc, parent=self)
+        if dialog.exec():
+            def create():
+                v = dialog.values()
+                return self.svc.create_objective(v.pop("name"), **v)
+            if guarded(self, create):
+                self.changed()
+
+    def edit(self):
+        key = self.table.selected_key()
+        if not key:
+            return
+        dialog = ObjectiveDialog(self.svc, self.svc.get_objective(key), parent=self)
+        if dialog.exec():
+            with self.svc.context(reason=dialog.change_reason()):
+                if guarded(self, lambda: self.svc.update_objective(key, **dialog.values())):
+                    self.changed()
+
+    def delete(self):
+        key = self.table.selected_key()
+        if key and QMessageBox.question(self, "Delete", f"Delete the objective '{self.svc.get_objective(key).name}'?"
+                                        " Risks are unlinked from it.") == QMessageBox.Yes:
+            if guarded(self, lambda: self.svc.delete_objective(key)) is not None:
+                self.changed()
+
+
 class EvidencePage(Page):
     """Observed events and public benchmarks, and what they say about the estimates."""
 
@@ -1395,6 +1488,7 @@ for _cls, _names in ((OrganisationPage, ("add", "add_child", "edit", "delete")),
                      (AnalysisPage, ("name_run",)), (ThirdPartyPage, ("add", "edit", "delete")),
                      (IncidentsPage, ("add", "edit", "delete", "mark")),
                      (EvidencePage, ("add", "edit", "delete", "apply")),
+                     (ObjectivesPage, ("add", "edit", "delete")),
                      (PortfolioPage, ("add_appetite", "edit_appetite", "delete_appetite", "add_correlation",
                                       "edit_correlation", "delete_correlation"))):
     for _name in _names:

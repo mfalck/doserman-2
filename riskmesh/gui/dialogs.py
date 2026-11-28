@@ -10,8 +10,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ..domain import risk_model
 from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
-                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, Appetite, Benchmark, BusinessUnit,
-                             Control, Correlation, Customer, Incident, Observation, Risk, Service, Supplier)
+                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES, Appetite, Benchmark,
+                             BusinessUnit, Control, Correlation, Customer, Incident, Objective, Observation, Risk,
+                             Service, Supplier)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 
@@ -152,6 +153,8 @@ class RiskDialog(BaseDialog):
         self.suppliers = _check_list(svc.list_suppliers(), set(risk.supplier_ids) if risk else set(), height=80)
         tp.addRow("Disrupts services", self.services)
         tp.addRow("Comes from suppliers", self.suppliers)
+        self.objectives = _check_list(svc.list_objectives(), set(risk.objective_ids) if risk else set(), height=70)
+        tp.addRow("Threatens objectives", self.objectives)
         lay3.addLayout(tp)
         self.layout_.addWidget(self.outage_box)
 
@@ -224,6 +227,7 @@ class RiskDialog(BaseDialog):
             "residual_impact": self.res_impact.spec() if residual else None,
             "service_ids": _checked(self.services),
             "supplier_ids": _checked(self.suppliers), "evidence_categories": _split(self.evidence.text()),
+            "objective_ids": _checked(self.objectives),
             "outage_hours": self.outage.spec() if self.has_outage.isChecked() else None,
             "residual_outage_hours": (self.res_outage.spec() if self.has_outage.isChecked()
                                       and self.res_outage.spec() != self.outage.spec() else None),
@@ -712,6 +716,49 @@ class BenchmarkDialog(BaseDialog):
                 "events_per_year": _float(self.rate), "loss_p10": _float(self.p10), "loss_p90": _float(self.p90),
                 "weight": self.weight.value(), "year": self.year.value() or None,
                 "source": self.source.text().strip() or None, "notes": self.notes.text().strip() or None}
+
+
+class ObjectiveDialog(BaseDialog):
+    """Something we must achieve, the services it is delivered through and how much loss is tolerable."""
+
+    def __init__(self, svc: RiskService, obj: Optional[Objective] = None, parent: Optional[QWidget] = None):
+        super().__init__("Edit objective" if obj else "New objective", obj is not None, parent)
+        o = obj
+        self.name = QLineEdit(o.name if o else "")
+        self.criticality = _enum_combo(OBJECTIVE_CRITICALITIES, o.criticality if o else "IMPORTANT")
+        self.unit = QComboBox()
+        self.unit.addItem("The whole organisation", None)
+        for u in svc.list_business_units():
+            self.unit.addItem(u.name, u.id)
+        if o and o.business_unit_id:
+            self.unit.setCurrentIndex(max(0, self.unit.findData(o.business_unit_id)))
+        self.owner = _person_combo(svc, o.owner_id if o else None)
+        self.services = _check_list(svc.list_services(), set(o.service_ids) if o else set(), height=90)
+        self.kpi = QLineEdit((o.kpi or "") if o else "")
+        self.kpi.setPlaceholderText("how achievement is measured, e.g. availability at least 99.9%")
+        self.target = QLineEdit((o.target_date or "") if o else "")
+        self.target.setPlaceholderText("YYYY-MM-DD")
+        self.tol_loss = QLineEdit("" if not o or o.tolerance_loss is None else f"{o.tolerance_loss:g}")
+        self.tol_loss.setPlaceholderText("annual loss against this objective")
+        self.tol_prob = QLineEdit("" if not o or o.tolerance_probability is None else f"{o.tolerance_probability * 100:g}")
+        self.tol_prob.setPlaceholderText("at most this chance per year, in %")
+        self.description = QPlainTextEdit((o.description or "") if o else "")
+        self.description.setFixedHeight(50)
+        for label, w in (("Name", self.name), ("Criticality", self.criticality), ("Pursued by", self.unit),
+                         ("Owner", self.owner), ("Delivered through services", self.services), ("KPI", self.kpi),
+                         ("Target date", self.target), ("Tolerance: loss above", self.tol_loss),
+                         ("Tolerance: max chance %", self.tol_prob), ("Description", self.description)):
+            self.form.addRow(label, w)
+        self.finish()
+
+    def values(self) -> Dict[str, Any]:
+        prob = _float(self.tol_prob)
+        return {"name": self.name.text(), "criticality": self.criticality.currentData(),
+                "business_unit_id": self.unit.currentData(), "owner_id": self.owner.currentData(),
+                "service_ids": _checked(self.services), "kpi": self.kpi.text().strip() or None,
+                "target_date": self.target.text().strip() or None, "tolerance_loss": _float(self.tol_loss),
+                "tolerance_probability": None if prob is None else prob / 100,
+                "description": self.description.toPlainText().strip() or None}
 
 
 class LoginDialog(QDialog):

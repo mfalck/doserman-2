@@ -30,7 +30,8 @@ def test_every_page_renders_with_data(window):
     for i in range(len(window.PAGES)):
         window.nav.setCurrentRow(i)
         window.pages[i].refresh()
-    dashboard, org, risks, controls = window.pages[:4]
+    dashboard, org, risks, controls = (window.pages[window.PAGES.index(n)]
+                                       for n in ("Overview", "Organisation", "Risks", "Controls"))
     assert dashboard.top.rowCount() == 5 and dashboard.cards["risks"].value.text() == "7"
     assert org.tree.topLevelItemCount() == 1
     assert risks.table.rowCount() == 7 and controls.table.rowCount() == 5
@@ -243,3 +244,16 @@ def test_observation_and_benchmark_dialogs_round_trip(window):
     v = BenchmarkDialog(svc, b).values()
     assert (v["events_per_year"], v["loss_p10"], v["weight"], v["year"]) == (b.events_per_year, b.loss_p10, b.weight, b.year)
     assert BenchmarkDialog(svc).values()["year"] is None
+
+
+def test_objectives_page_and_dialog(window):
+    from riskmesh.gui.dialogs import ObjectiveDialog
+    page = window.pages[window.PAGES.index("Objectives")]
+    window.nav.setCurrentRow(window.PAGES.index("Objectives"))
+    assert page.table.rowCount() == 4
+    names = [page.table.item(r, 0).text() for r in range(4)]
+    page.table.selectRow(names.index("Grow sales 10% in 2027"))
+    assert "Major customer churn" in page.detail.toPlainText()
+    o = window.svc.list_objectives()[0]
+    v = ObjectiveDialog(window.svc, o).values()
+    assert v["service_ids"] == o.service_ids and v["tolerance_probability"] == pytest.approx(o.tolerance_probability)

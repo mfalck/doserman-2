@@ -21,6 +21,7 @@ SUPPLIER_TIERS = ("CRITICAL", "IMPORTANT", "STANDARD")
 # regimes a customer is subject to; they decide what the customer will ask of us
 REGULATIONS = ("NIS2_ESSENTIAL", "NIS2_IMPORTANT", "DORA", "CER", "GDPR", "OTHER")
 INCIDENT_STATUSES = ("OPEN", "CONTAINED", "RESOLVED", "CLOSED")
+OBJECTIVE_CRITICALITIES = ("MISSION_CRITICAL", "IMPORTANT", "SUPPORTING")
 
 
 def new_id() -> str:
@@ -121,6 +122,7 @@ class Risk(Entity):
     # which categories of observed events and public benchmarks are evidence for this risk
     # (e.g. ["data breach", "phishing"]); the risk's own category always counts too
     evidence_categories: List[str] = field(default_factory=list)
+    objective_ids: List[str] = field(default_factory=list)   # objectives this risk threatens directly
 
 
 @dataclass
@@ -215,6 +217,29 @@ class Incident(Entity):
     root_cause: Optional[str] = None
     financial_impact: Optional[float] = None
     notifications: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Objective(Entity):
+    """
+    Something the organisation must achieve, e.g. "Keep the citizen portal
+    available 99.9%" or "Deliver meter data to the energy market on time".
+    Risks threaten it directly (Risk.objective_ids) or by disrupting the
+    services that deliver it. The tolerance says how much loss against the
+    objective is acceptable: at most `tolerance_probability` chance per year
+    of losing more than `tolerance_loss`.
+    """
+    kind: ClassVar[str] = "objective"
+    name: str
+    criticality: str = "IMPORTANT"               # MISSION_CRITICAL | IMPORTANT | SUPPORTING
+    description: Optional[str] = None
+    business_unit_id: Optional[str] = None       # None: an objective of the whole organisation
+    owner_id: Optional[str] = None
+    service_ids: List[str] = field(default_factory=list)   # services that deliver it
+    kpi: Optional[str] = None                    # how achievement is measured, e.g. "availability >= 99.9%"
+    target_date: Optional[str] = None
+    tolerance_loss: Optional[float] = None
+    tolerance_probability: Optional[float] = None
 
 
 @dataclass
@@ -488,7 +513,7 @@ class PeriodFact(Entity):
 
 
 # Data entities in dependency order (referenced types first)
-DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Risk, Correlation, Appetite, Control,
+DATA_TYPES = (Person, BusinessUnit, Asset, Supplier, Service, Customer, Objective, Risk, Correlation, Appetite, Control,
               RiskEvent, ControlEvent, Incident, Observation, Benchmark)
 ENTITY_TYPES = DATA_TYPES + (AuditEntry, AnalysisRun, User, ApiToken, AuditAnchor, ReportingPeriod, PeriodFact)
 # entities whose stored state verify_audit() compares with the audit trail
@@ -526,6 +551,10 @@ REFERENCES = [
     (Incident, "supplier_ids", Supplier, True, "STARTED_AT"),
     (Incident, "risk_id", Risk, False, "MATERIALISED"),
     (Incident, "owner_id", Person, False, "HANDLED_BY"),
+    (Objective, "business_unit_id", BusinessUnit, False, "PURSUED_BY"),
+    (Objective, "owner_id", Person, False, "OWNED_BY"),
+    (Objective, "service_ids", Service, True, "DELIVERED_THROUGH"),
+    (Risk, "objective_ids", Objective, True, "THREATENS"),
     (Observation, "business_unit_id", BusinessUnit, False, "OBSERVED_AT"),
     (Observation, "supplier_id", Supplier, False, "OBSERVED_AT"),
     (Observation, "risk_id", Risk, False, "EVIDENCE_FOR"),
