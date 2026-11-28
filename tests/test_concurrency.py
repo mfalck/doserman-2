@@ -110,7 +110,7 @@ def test_missing_columns_are_added_and_newer_schema_refused(tmp_path):
     with engine.begin() as conn:
         conn.execute(text("UPDATE riskmesh_meta SET value = :v WHERE key = 'schema_version'"),
                      {"v": str(SCHEMA_VERSION + 1)})
-    with pytest.raises(StorageError, match="newer|Upgrade"):
+    with pytest.raises(StorageError, match=r"newer|Upgrade"):
         SqlRepository(url)
     engine.dispose()
 

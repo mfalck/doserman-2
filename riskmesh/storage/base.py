@@ -61,7 +61,7 @@ class Repository(ABC):
         items = self.list(cls)
         return max(items, key=lambda e: getattr(e, field)) if items else None
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027 - optional hook, deliberately not abstract
         """Releases connections and locks. Optional."""
 
     def __enter__(self):

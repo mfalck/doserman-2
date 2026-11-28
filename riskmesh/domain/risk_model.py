@@ -82,7 +82,7 @@ def build_impact_distribution(spec: Dict[str, Any]):
         try:
             return getattr(stats, dist)(**spec.get("params", {}))
         except Exception as e:
-            raise ValueError(f"Could not create scipy distribution '{dist}' with {spec.get('params')}: {e}")
+            raise ValueError(f"Could not create scipy distribution '{dist}' with {spec.get('params')}: {e}") from e
     raise ValueError(f"Unknown impact distribution: {dist!r}")
 
 
@@ -198,11 +198,11 @@ def summarize_distribution(dist_type: str, **params) -> Dict[str, Any]:
     try:
         dist_class = getattr(stats, dist_type)
     except AttributeError:
-        raise ValueError(f"Distribution '{dist_type}' is not found in scipy.stats")
+        raise ValueError(f"Distribution '{dist_type}' is not found in scipy.stats") from None
     try:
         dist = dist_class(**params)
     except Exception as e:
-        raise ValueError(f"Failed to instantiate '{dist_type}' with {params}: {e}")
+        raise ValueError(f"Failed to instantiate '{dist_type}' with {params}: {e}") from e
     skew, kurt = dist.stats(moments="sk")
     return {
         "dist_type": dist_type,
@@ -404,7 +404,7 @@ class SimulationResult:
 
         total = self.total_losses()
         # Diversification: sum of stand-alone P99s vs. P99 of the total
-        standalone_p99 = sum(float(np.percentile(l, 99)) for l in self.risk_losses.values())
+        standalone_p99 = sum(float(np.percentile(x, 99)) for x in self.risk_losses.values())
         total_stats = loss_statistics(total, percentiles)
         report = {
             "n_trials": self.n_trials,

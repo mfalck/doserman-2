@@ -20,11 +20,31 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 from ..domain import analytic, audit, methods, risk_model
 from ..domain.consequences import Severity
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
-from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
-                             VERIFIED_TYPES, ApiToken, User,
-                             IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REFERENCES, RISK_EVENT_STATUSES,
-                             RISK_EVENT_TYPES, Asset, AuditEntry, BusinessUnit, Control, ControlEvent, Entity,
-                             Person, Risk, RiskEvent)
+from ..domain.models import (
+    CONTROL_EVENT_STATUSES,
+    CONTROL_EVENT_TYPES,
+    CONTROL_TYPES,
+    DATA_TYPES,
+    ENTITY_TYPES,
+    IMPLEMENTATION_STATUSES,
+    ORGANIZATION_TYPES,
+    REFERENCES,
+    RISK_EVENT_STATUSES,
+    RISK_EVENT_TYPES,
+    VERIFIED_TYPES,
+    AnalysisRun,
+    ApiToken,
+    Asset,
+    AuditEntry,
+    BusinessUnit,
+    Control,
+    ControlEvent,
+    Entity,
+    Person,
+    Risk,
+    RiskEvent,
+    User,
+)
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
 from .customer_report import CustomerReport
@@ -33,11 +53,11 @@ from .dora import DoraExtract
 from .drivers import DRIVER_WRITE_METHODS, Drivers
 from .evidence import EVIDENCE_WRITE_METHODS, Evidence
 from .excel import ExcelExchange
-from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
 from .incidents import INCIDENT_WRITE_METHODS, Incidents
+from .objectives import OBJECTIVE_WRITE_METHODS, Objectives
 from .portfolio import PORTFOLIO_WRITE_METHODS, Portfolio
-from .scenarios import SCENARIO_WRITE_METHODS, Scenarios
 from .reporting import REPORTING_WRITE_METHODS, Reporting
+from .scenarios import SCENARIO_WRITE_METHODS, Scenarios
 from .third_party import THIRD_PARTY_WRITE_METHODS, ThirdParty
 from .users import USER_WRITE_METHODS, UserAdmin
 

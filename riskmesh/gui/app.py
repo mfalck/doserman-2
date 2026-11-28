@@ -7,16 +7,38 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QFont
-from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox,
-                               QStackedWidget, QWidget)
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QWidget,
+)
 
 from .. import __version__
 from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..services.demo import seed_demo
 from .dialogs import LoginDialog
-from .pages import (AnalysisPage, AuditPage, ControlsPage, DashboardPage, DecisionsPage, DriversPage, EvidencePage, IncidentsPage, ObjectivesPage,
-                    OrganisationPage, PortfolioPage, ReportsPage, RisksPage, ThirdPartyPage)
+from .pages import (
+    AnalysisPage,
+    AuditPage,
+    ControlsPage,
+    DashboardPage,
+    DecisionsPage,
+    DriversPage,
+    EvidencePage,
+    IncidentsPage,
+    ObjectivesPage,
+    OrganisationPage,
+    PortfolioPage,
+    ReportsPage,
+    RisksPage,
+    ThirdPartyPage,
+)
 from .widgets import guarded
 
 
@@ -140,7 +162,8 @@ class MainWindow(QMainWindow):
             return
 
         def do_import():
-            raw = open(path, "rb").read()
+            with open(path, "rb") as f:
+                raw = f.read()
             source = f"import:{os.path.basename(path)}:sha256:{hashlib.sha256(raw).hexdigest()}"
             with self.svc.context(source=source):
                 return self.svc.import_data(json.loads(raw.decode("utf-8")), replace=replace == QMessageBox.Yes)
@@ -172,7 +195,8 @@ class MainWindow(QMainWindow):
             if answer == QMessageBox.Cancel:
                 return
             replace = answer == QMessageBox.Yes
-        content = open(path, "rb").read()
+        with open(path, "rb") as f:
+            content = f.read()
         preview = guarded(self, lambda: self.svc.import_excel(content, replace=replace, dry_run=True))
         if not preview:
             return
@@ -244,7 +268,7 @@ class MainWindow(QMainWindow):
         lines = [f"<tr><td>{k}</td><td><b>{v}</b></td></tr>" for k, v in self.settings.public().items()]
         QMessageBox.information(self, "Configuration", "<table>" + "".join(lines) + "</table>")
 
-    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+    def closeEvent(self, event) -> None:
         self.svc.repo.close()
         super().closeEvent(event)
 

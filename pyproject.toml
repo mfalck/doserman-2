@@ -33,7 +33,7 @@ postgres = ["sqlalchemy>=2.0", "psycopg[binary]>=3.1"]
 neo4j = ["neo4j>=5.0"]
 gui = ["PySide6>=6.6"]
 all = ["riskmesh[api,sql,postgres,neo4j,gui]"]
-dev = ["riskmesh[api,sql,neo4j]", "pytest>=8.0", "httpx>=0.27", "pyflakes>=3.0"]
+dev = ["riskmesh[api,sql,neo4j]", "pytest>=8.0", "httpx>=0.27", "ruff>=0.6", "mypy>=1.10"]
 
 [project.scripts]
 riskmesh = "riskmesh.presentation.cli:main"
@@ -50,3 +50,43 @@ include = ["riskmesh*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle errors, import order, bugbear, pyupgrade-lite, simplifications that matter
+select = ["F", "E", "W", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # long lines: the formatter's call, not an error
+    "E731",    # small lambdas are fine
+    "B008",    # FastAPI's Depends() in defaults
+    "SIM108",  # ternaries are not always clearer
+    "RUF001", "RUF002", "RUF003",  # en dashes, arrows and x in texts are intended
+    "UP006", "UP007", "UP035", "UP045",  # keep typing.Dict/Optional (Python 3.10 baseline)
+    "RUF059", "RUF005", "RUF007", "RUF012", "RUF046", "C408", "C402", "SIM102", "B905",  # style, not defects
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117", "B017"]  # some backends raise driver-specific errors
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["riskmesh"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = false
+# the GUI is checked by its smoke tests; Qt's stubs are noisy
+exclude = ["riskmesh/gui/"]
+
+[[tool.mypy.overrides]]
+# the RiskService mixins use attributes of the class they are mixed into (self.repo, self._create ...);
+# mypy cannot see that until the service is split into explicit collaborators
+module = "riskmesh.services.*"
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "riskmesh.gui.*"
+ignore_errors = true
+

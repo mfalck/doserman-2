@@ -95,7 +95,7 @@ class _ProcessLock:
 
     def __init__(self, path: str):
         self.path = path
-        self.handle = open(path, "a+b")
+        self.handle = open(path, "a+b")  # noqa: SIM115 - held open for the lock's lifetime, closed in release()
         try:
             if os.name == "nt":
                 import msvcrt
@@ -142,7 +142,7 @@ class JsonRepository(MemoryRepository):
 
     def _load(self) -> None:
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
         except json.JSONDecodeError as e:
             raise StorageError(f"{self.path} is not valid JSON: {e}") from e

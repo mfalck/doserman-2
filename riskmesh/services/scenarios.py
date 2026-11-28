@@ -13,7 +13,8 @@ variation.
 
 from typing import Any, Dict, List, Optional
 
-from ..domain import analytic, decisions as dec
+from ..domain import analytic
+from ..domain import decisions as dec
 from ..domain.errors import ValidationError
 from ..domain.models import BusinessUnit, Driver, Risk, Scenario
 

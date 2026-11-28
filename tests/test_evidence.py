@@ -39,7 +39,7 @@ def test_levels_decide_which_risks_an_observation_counts_for(svc):
     o_dc = svc.create_observation("2025-08-01", "hosting outage", supplier_id=x["dc"].id, count=3, source="log")
     o_named = svc.create_observation("2025-09-01", "something else", risk_id=x["breach"].id, source="log")
     o_fraud = svc.create_observation("2025-10-01", "Fraud", source="claims")   # group level, risk's own category
-    ids = lambda c: {o["id"] for o in c["observations"]}  # noqa: E731
+    ids = lambda c: {o["id"] for o in c["observations"]}
     assert ids(svc.calibrate_risk(x["breach"].id, today=TODAY)) == {o_dev.id, o_named.id}
     assert ids(svc.calibrate_risk(x["outage"].id, today=TODAY)) == {o_dc.id}  # fourth party counts
     assert ids(svc.calibrate_risk(x["fraud"].id, today=TODAY)) == {o_fraud.id}
@@ -132,8 +132,9 @@ def test_excel_round_trip_and_hand_made_rows(svc):
     content = svc.export_excel()
     preview = svc.import_excel(content, dry_run=True)
     assert preview["changes"]["observation"]["unchanged"] == 1 and preview["changes"]["benchmark"]["unchanged"] == 1
-    from openpyxl import load_workbook
     import io
+
+    from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(content))
     ws = wb["Observations"]
     headers = [c.value.rstrip(" *") for c in ws[1]]

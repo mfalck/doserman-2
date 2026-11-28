@@ -22,4 +22,4 @@ def create_repository(settings) -> Repository:
     raise RuntimeError(f"Unknown backend {backend!r} (use json, sql, neo4j or memory)")
 
 
-__all__ = ["Repository", "MemoryRepository", "JsonRepository", "create_repository"]
+__all__ = ["JsonRepository", "MemoryRepository", "Repository", "create_repository"]

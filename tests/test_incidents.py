@@ -125,8 +125,9 @@ def test_dora_extract_ranks_and_gaps(svc):
     town = svc.dora_extract(x["town"].id)
     assert any("Hub" in g and "ICT service type" in g for g in town["gaps"])
     content = svc.export_dora_extract(x["bank"].id)
-    from openpyxl import load_workbook
     import io
+
+    from openpyxl import load_workbook
     wb = load_workbook(io.BytesIO(content))
     assert "Supply chain (B_05.02)" in wb.sheetnames and wb["Providers (B_05.01)"].max_row == 4
 

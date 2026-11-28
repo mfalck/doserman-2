@@ -24,10 +24,42 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 from ..domain import audit
 from ..domain.errors import ValidationError
-from ..domain.models import (CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES,
-                             IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS, RISK_EVENT_STATUSES,
-                             RISK_EVENT_TYPES, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Appetite, Asset, BusinessUnit, Control,
-                             Benchmark, ControlEvent, Correlation, Driver, DriverEffect, Scenario, Incident, Objective, Observation, Customer, Entity, Person, Risk, RiskEvent, Service, Supplier, new_id)
+from ..domain.models import (
+    CONTROL_EVENT_STATUSES,
+    CONTROL_EVENT_TYPES,
+    CONTROL_TYPES,
+    DATA_TYPES,
+    IMPLEMENTATION_STATUSES,
+    INCIDENT_STATUSES,
+    OBJECTIVE_CRITICALITIES,
+    ORGANIZATION_TYPES,
+    REGULATIONS,
+    RISK_EVENT_STATUSES,
+    RISK_EVENT_TYPES,
+    SERVICE_CRITICALITIES,
+    SUPPLIER_TIERS,
+    Appetite,
+    Asset,
+    Benchmark,
+    BusinessUnit,
+    Control,
+    ControlEvent,
+    Correlation,
+    Customer,
+    Driver,
+    DriverEffect,
+    Entity,
+    Incident,
+    Objective,
+    Observation,
+    Person,
+    Risk,
+    RiskEvent,
+    Scenario,
+    Service,
+    Supplier,
+    new_id,
+)
 
 SEP = "; "
 MAX_ERRORS = 25

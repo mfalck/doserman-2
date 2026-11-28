@@ -17,8 +17,16 @@ from typing import Any, Dict, List, Optional, Set
 
 from ..domain import consequences
 from ..domain.errors import ValidationError
-from ..domain.models import (REGULATIONS, SERVICE_CRITICALITIES, SUPPLIER_TIERS, Control, Customer, Risk,
-                             Service, Supplier)
+from ..domain.models import (
+    REGULATIONS,
+    SERVICE_CRITICALITIES,
+    SUPPLIER_TIERS,
+    Control,
+    Customer,
+    Risk,
+    Service,
+    Supplier,
+)
 
 CONTRACT_WARNING_DAYS = 90
 
@@ -302,7 +310,7 @@ class ThirdParty:
                                            "critical_function_customers", "by_regulation",
                                            "shortest_notification_hours")},
             })
-        key = lambda x: (-x["contract_value"], -x["customer_count"], x["name"])  # noqa: E731
+        key = lambda x: (-x["contract_value"], -x["customer_count"], x["name"])
         customers = list(g["customers"].values())
         return {
             "suppliers": sorted(suppliers, key=key),

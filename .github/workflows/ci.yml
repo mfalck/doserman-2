@@ -9,14 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: python -m pyflakes riskmesh tests
+      - run: python -m ruff check riskmesh tests
+      # informational until the RiskService split gives the mixins explicit collaborators
+      - run: python -m mypy
+        continue-on-error: true
       - run: python -m pytest -q
 
   # The same test suite against real PostgreSQL and Neo4j servers.

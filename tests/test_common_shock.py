@@ -43,6 +43,7 @@ def test_fingerprint_unchanged_without_outage():
 
 def test_api_stress_and_fields():
     from fastapi.testclient import TestClient
+
     from riskmesh.config import Settings
     from riskmesh.presentation.api import create_app
     svc, cloud, r = build()

@@ -16,27 +16,24 @@ Access ([auth] mode in riskmesh.toml):
               data, admin = users, tokens and replacing all data on import.
 """
 
-from typing import Any, Dict, List, Optional
-from urllib.parse import quote, unquote
-
 import logging
 import os
 import re
 import time
 from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from .. import __version__
 from ..bootstrap import make_service
 from ..config import Settings, load_settings
 from ..domain import audit
 from ..domain import models as m
-from ..domain.errors import (AuthenticationError, ConflictError, NotFoundError, PermissionDenied,
-                             ValidationError)
+from ..domain.errors import AuthenticationError, ConflictError, NotFoundError, PermissionDenied, ValidationError
 from ..domain.models import User
 from ..services import RiskService
 from . import schemas as s

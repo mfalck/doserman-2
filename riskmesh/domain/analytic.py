@@ -35,7 +35,13 @@ import numpy as np
 from scipy import stats
 
 from .consequences import Severity
-from .risk_model import DEFAULT_PERCENTILES, build_impact_distribution, consequence_report, term_index, validate_frequency
+from .risk_model import (
+    DEFAULT_PERCENTILES,
+    build_impact_distribution,
+    consequence_report,
+    term_index,
+    validate_frequency,
+)
 
 SEVERITY_EPS = 1e-6       # severity tail beyond this quantile is collapsed onto it
 COUNT_EPS = 1e-9          # P(more events than the grid allows for)

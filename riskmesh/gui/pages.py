@@ -7,16 +7,55 @@ from typing import Any, Callable, Dict, Optional
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QLogValueAxis, QValueAxis
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
-                               QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTreeWidget, QTreeWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..services import RiskService
-from .dialogs import (AppetiteDialog, BenchmarkDialog, ControlDialog, CorrelationDialog, CustomerDialog,
-                      DriverDialog, DriverEffectDialog, IncidentDialog, ObjectiveDialog, ObservationDialog, RiskDialog, ServiceDialog, SupplierDialog,
-                      UnitDialog)
-from .widgets import (LEVEL_COLORS, Card, Table, compact, describe_frequency, describe_impact, guarded, heading,
-                      money, title)
+from .dialogs import (
+    AppetiteDialog,
+    BenchmarkDialog,
+    ControlDialog,
+    CorrelationDialog,
+    CustomerDialog,
+    DriverDialog,
+    DriverEffectDialog,
+    IncidentDialog,
+    ObjectiveDialog,
+    ObservationDialog,
+    RiskDialog,
+    ServiceDialog,
+    SupplierDialog,
+    UnitDialog,
+)
+from .widgets import (
+    LEVEL_COLORS,
+    Card,
+    Table,
+    compact,
+    describe_frequency,
+    describe_impact,
+    guarded,
+    heading,
+    money,
+    title,
+)
 
 
 class Page(QWidget):
@@ -785,7 +824,7 @@ class ThirdPartyPage(Page):
         self.cards["Regulated customers"].set(str(t["regulated_customers"]), "NIS2, DORA, CER ...")
         self.cards["Open findings"].set(str(len(o["findings"])), f"{high} high")
         tab = self._tab()
-        regs = lambda d: ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in d.items())  # noqa: E731
+        regs = lambda d: ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in d.items())
         if tab == "Suppliers":
             by_id = {x.id: x for x in self.svc.list_suppliers()}
             headers = ["Supplier", "Tier", "Country", "Services", "Customers", "Contract value", "Regulation",
@@ -906,11 +945,11 @@ class ThirdPartyPage(Page):
             v = dialog.values()
             tab = self._tab()
             if tab == "Suppliers":
-                fn = lambda: self.svc.create_supplier(v.pop("name"), **v)  # noqa: E731
+                fn = lambda: self.svc.create_supplier(v.pop("name"), **v)
             elif tab == "Services":
-                fn = lambda: self.svc.create_service(v.pop("business_unit_id"), v.pop("name"), **v)  # noqa: E731
+                fn = lambda: self.svc.create_service(v.pop("business_unit_id"), v.pop("name"), **v)
             else:
-                fn = lambda: self.svc.create_customer(v.pop("name"), **v)  # noqa: E731
+                fn = lambda: self.svc.create_customer(v.pop("name"), **v)
             if guarded(self, fn):
                 self.changed()
 
@@ -1603,7 +1642,7 @@ class EvidencePage(Page):
             rows_ = self.svc.calibration_overview(float(self.expert.value()))
             headers = ["Risk", "Events", "Years", "Benchmarks", "Estimate /yr", "Data /yr", "Suggested /yr", "Change",
                        "Loss median"]
-            pct = lambda v: "" if v is None else f"{v:+.0%}"  # noqa: E731
+            pct = lambda v: "" if v is None else f"{v:+.0%}"
             rows = [[r["name"], r["events"], f"{r['years']:.1f}", r["benchmarks"], f"{r['current_rate']:.3f}",
                      "" if r["observed_rate"] is None else f"{r['observed_rate']:.3f}", f"{r['calibrated_rate']:.3f}",
                      pct(r["rate_change"]), pct(r["impact_change"])] for r in rows_]

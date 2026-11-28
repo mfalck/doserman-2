@@ -3,16 +3,53 @@
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-                               QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPlainTextEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..domain import risk_model
-from ..domain.models import (CONTROL_TYPES, IMPLEMENTATION_STATUSES, ORGANIZATION_TYPES, REGULATIONS,
-                             SERVICE_CRITICALITIES, SUPPLIER_TIERS, INCIDENT_STATUSES, OBJECTIVE_CRITICALITIES, Appetite, Benchmark,
-                             BusinessUnit, Control, Correlation, Customer, Driver, DriverEffect, Incident, Objective,
-                             Observation, Risk, Service, Supplier)
+from ..domain.models import (
+    CONTROL_TYPES,
+    IMPLEMENTATION_STATUSES,
+    INCIDENT_STATUSES,
+    OBJECTIVE_CRITICALITIES,
+    ORGANIZATION_TYPES,
+    REGULATIONS,
+    SERVICE_CRITICALITIES,
+    SUPPLIER_TIERS,
+    Appetite,
+    Benchmark,
+    BusinessUnit,
+    Control,
+    Correlation,
+    Customer,
+    Driver,
+    DriverEffect,
+    Incident,
+    Objective,
+    Observation,
+    Risk,
+    Service,
+    Supplier,
+)
 from ..services import RiskService
 from .widgets import LEVEL_COLORS, FrequencyEditor, ImpactEditor, money, title
 

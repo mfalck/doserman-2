@@ -30,7 +30,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9._@\-]{2,100}$")
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32)
-    b64 = lambda b: base64.b64encode(b).decode("ascii")  # noqa: E731
+    b64 = lambda b: base64.b64encode(b).decode("ascii")
     return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${b64(salt)}${b64(digest)}"
 
 
@@ -248,4 +248,4 @@ class UserAdmin:
 USER_WRITE_METHODS = ("create_user", "update_user", "set_password", "delete_user", "upsert_external_user",
                       "issue_token", "revoke_token", "logout")
 
-__all__ = ["UserAdmin", "USER_WRITE_METHODS", "hash_password", "check_password", "role_at_least"]
+__all__ = ["USER_WRITE_METHODS", "UserAdmin", "check_password", "hash_password", "role_at_least"]

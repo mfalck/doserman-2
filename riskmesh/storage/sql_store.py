@@ -24,13 +24,30 @@ import typing
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, Iterator, List, Optional, Type
 
-from sqlalchemy import (JSON, Boolean, Column, Float, Index, Integer, MetaData, String, Table, Text, create_engine, delete,
-                        inspect, insert, select, text, update)
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Float,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    delete,
+    insert,
+    inspect,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import OperationalError
 
-from ..domain.models import ENTITY_TYPES, ApiToken, AuditEntry, Entity, User
 from ..domain.audit import sha256 as audit_sha
+from ..domain.models import ENTITY_TYPES, ApiToken, AuditEntry, Entity, User
 from .base import E, Repository, StorageError
 
 log = logging.getLogger(__name__)

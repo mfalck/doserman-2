@@ -15,10 +15,10 @@ import argparse
 import getpass
 import hashlib
 import json
-import os
-from pathlib import Path
 import logging
+import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List
 
 from ..bootstrap import make_service
@@ -585,7 +585,7 @@ def run(args, svc: RiskService) -> int:
               f"checksum {data['content_sha256'][:16]}…")
 
     elif args.command == "restore":
-        with open(args.file, "r", encoding="utf-8") as f:
+        with open(args.file, encoding="utf-8") as f:
             result = svc.restore_data(json.load(f), force=args.force)
         print("Restored:", ", ".join(f"{v} {k}" for k, v in result["restored"].items() if v))
         v = result["verification"]
@@ -836,11 +836,12 @@ def run(args, svc: RiskService) -> int:
         return 0 if result["ok"] else 2
 
     elif args.command == "audit" and args.audit_command == "log":
-        for e in svc.list_audit(args.limit, entity_id=args.entity):
-            print(f"#{e.seq:<5} {e.timestamp[:19]}  {e.user_id:<12} {e.action:<7} {e.entity_type:<13} "
-                  f"{(e.details or '')[:30]:<30} [{e.source}]" + (f"  reason: {e.reason}" if e.reason else ""))
-            for field, (old, new) in (e.changes or {}).items():
-                if e.action == "UPDATE":
+        for entry in svc.list_audit(args.limit, entity_id=args.entity):
+            print(f"#{entry.seq:<5} {entry.timestamp[:19]}  {entry.user_id:<12} {entry.action:<7} "
+                  f"{entry.entity_type:<13} {(entry.details or '')[:30]:<30} [{entry.source}]"
+                  + (f"  reason: {entry.reason}" if entry.reason else ""))
+            for field, (old, new) in (entry.changes or {}).items():
+                if entry.action == "UPDATE":
                     print(f"         {field}: {json.dumps(old)} -> {json.dumps(new)}")
 
     return 0

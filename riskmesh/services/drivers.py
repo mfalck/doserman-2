@@ -17,7 +17,8 @@ Carlo engine applies it, the analytic engine only the level.
 import math
 from typing import Any, Dict, List, Optional
 
-from ..domain import analytic, decisions as dec, risk_model
+from ..domain import analytic, risk_model
+from ..domain import decisions as dec
 from ..domain.consequences import Severity
 from ..domain.errors import ConflictError, ValidationError
 from ..domain.models import BusinessUnit, Driver, DriverEffect, Risk
