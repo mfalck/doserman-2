@@ -153,6 +153,11 @@ def seed_demo(svc: RiskService) -> None:
                                  indicator="Unplanned downtime minutes per month at Nordic Cloud")
     svc.create_driver_effect(platform.id, outage.id, frequency_sensitivity=1.0, impact_sensitivity=0.5)
 
+    # A control that works through a driver: all risks the driver drives benefit
+    svc.create_control(it.id, "Automated patching and privileged access management", control_type="PREVENTIVE",
+                       owner_id=jane.id, implementation_cost=180_000, annual_cost=70_000, driver_id=hygiene.id,
+                       driver_reduction=0.35, description="Patches within 72 hours; no standing admin rights")
+
     # Scenarios: what if the world turns? (compared with today on the total, appetite and objectives)
     svc.create_scenario("Geopolitical crisis", likelihood="plausible within 5 years",
                         description="State-backed cyber campaigns and a recession at the same time",

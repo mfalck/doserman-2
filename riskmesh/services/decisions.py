@@ -16,12 +16,12 @@ figures come from the exact analytic engine, which treats risks as
 independent.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from ..domain import analytic, decisions as dec, risk_model
 from ..domain.consequences import Severity
 from ..domain.errors import ValidationError
-from ..domain.models import BusinessUnit, Control, Risk
+from ..domain.models import BusinessUnit, Control, Driver, Risk
 
 ACTIVE = ("PLANNED", "IN_PROGRESS", "IMPLEMENTED")
 CANDIDATES = ("PLANNED", "IN_PROGRESS")
@@ -47,32 +47,75 @@ class Decisions:
             v = getattr(c, f)
             if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 0.99):
                 raise ValidationError(f"{f} must be a share from 0 to 0.99 (e.g. 0.3 for 30%).")
+        v = c.driver_reduction
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 0.9):
+            raise ValidationError("driver_reduction must be a share from 0 to 0.9 (e.g. 0.3 lowers the level by 30%).")
+        if v and not c.driver_id:
+            raise ValidationError("Choose the driver the control improves.")
         if isinstance(c.lifetime_years, bool) or not isinstance(c.lifetime_years, (int, float)) or c.lifetime_years <= 0:
             raise ValidationError("lifetime_years must be positive.")
 
     @staticmethod
-    def _has_effect(c: Control) -> bool:
-        return bool(c.frequency_reduction or c.impact_reduction)
+    def _has_direct(c: Control) -> bool:
+        return bool((c.frequency_reduction or c.impact_reduction) and c.risk_ids)
 
-    def _decision_state(self) -> Dict[str, Dict[str, Any]]:
-        return self.engine_risks(self.repo.list(Risk))
+    @staticmethod
+    def _driver_part(c: Control, drivers: Dict[str, Driver]):
+        """(driver id, level multiplier) when the control improves a driver."""
+        if c.driver_id and c.driver_reduction and c.driver_id in drivers:
+            return c.driver_id, 1.0 - c.driver_reduction
+        return None
 
-    def _value(self, c: Control, risks: Dict[str, Dict[str, Any]], tail: bool = True,
-               base_p99: Any = None) -> Dict[str, Any]:
-        """The control's value on the given state (adds a planned control, removes an implemented one)."""
+    def _has_effect(self, c: Control, drivers: Optional[Dict[str, Driver]] = None) -> bool:
+        drivers = drivers if drivers is not None else {d.id: d for d in self.repo.list(Driver)}
+        return self._has_direct(c) or self._driver_part(c, drivers) is not None
+
+    def _ctx_state(self, levels: Dict[str, float], added: List[Control]) -> Dict[str, Dict[str, Any]]:
+        """The risks with these driver levels and the direct effects of the added controls."""
+        state = self._state_at(levels)
+        for c in added:
+            if self._has_direct(c):
+                for rid in c.risk_ids:
+                    if rid in state:
+                        state[rid] = dec.apply_effect(state[rid], c.frequency_reduction or 0, c.impact_reduction or 0)
+        return state
+
+    def _new_ctx(self) -> Dict[str, Any]:
+        drivers = {d.id: d for d in self.repo.list(Driver)}
+        return {"levels": {}, "added": [], "drivers": drivers, "state": self._ctx_state({}, [])}
+
+    def _value(self, c: Control, ctx: Dict[str, Any], tail: bool = True, base_p99: Any = None) -> Dict[str, Any]:
+        """
+        The control's value on the given state: adds a planned control, removes an implemented one.
+        Its direct effect works on its own risks; its driver effect on every risk the driver drives.
+        """
         implemented = c.implementation_status == "IMPLEMENTED"
-        ids = [rid for rid in c.risk_ids if rid in risks]
-        changed = {rid: dec.apply_effect(risks[rid], c.frequency_reduction or 0, c.impact_reduction or 0,
-                                         remove=implemented) for rid in ids}
-        without = {rid: (changed[rid] if implemented else risks[rid]) for rid in ids}
-        with_ = {rid: (risks[rid] if implemented else changed[rid]) for rid in ids}
+        state = ctx["state"]
+        dp = self._driver_part(c, ctx["drivers"])
+        if dp:
+            did, k = dp
+            levels = dict(ctx["levels"])
+            current = levels.get(did, ctx["drivers"][did].level)
+            levels[did] = min(max(current / k if implemented else current * k, 0.05), 20.0)
+            other = self._ctx_state(levels, ctx["added"])
+        else:
+            other = dict(state)
+        if self._has_direct(c):
+            for rid in c.risk_ids:
+                if rid in other:
+                    other[rid] = dec.apply_effect(other[rid], c.frequency_reduction or 0, c.impact_reduction or 0,
+                                                  remove=implemented)
+        without, with_ = (other, state) if implemented else (state, other)
+        ids = [rid for rid in state if rid in other and abs(_eal(without[rid]) - _eal(with_[rid])) > 1e-6]
         benefit = sum(_eal(without[rid]) - _eal(with_[rid]) for rid in ids)
         cost = dec.annualised_cost(c.implementation_cost, c.annual_cost, c.lifetime_years)
         out = {
             "id": c.id, "name": c.name, "status": c.implementation_status, "risk_count": len(ids),
-            "risks": [{"id": rid, "name": risks[rid]["name"], "eal_without": _eal(without[rid]),
+            "risks": [{"id": rid, "name": state[rid]["name"], "eal_without": _eal(without[rid]),
                        "eal_with": _eal(with_[rid])} for rid in ids],
             "frequency_reduction": c.frequency_reduction, "impact_reduction": c.impact_reduction,
+            "driver": ({"id": dp[0], "name": ctx["drivers"][dp[0]].name, "reduction": c.driver_reduction}
+                       if dp else None),
             "implementation_cost": c.implementation_cost, "annual_cost": c.annual_cost,
             "lifetime_years": c.lifetime_years, "annualised_cost": cost,
             "benefit": benefit, "net_benefit": benefit - cost,
@@ -80,26 +123,42 @@ class Decisions:
             "benefit_per_cost": benefit / cost if cost > 0 else None,
             "payback_years": (c.implementation_cost or 0) / (benefit - (c.annual_cost or 0))
             if benefit > (c.annual_cost or 0) and c.implementation_cost else None,
+            "_other": other,
         }
         if tail and ids:
             # one side is the current state, whose P99 the caller computed once
-            current = base_p99 if base_p99 is not None else _total_p99(risks)
-            other = _total_p99({**risks, **(without if implemented else with_)})
-            out["p99_without"], out["p99_with"] = (other, current) if implemented else (current, other)
+            current = base_p99 if base_p99 is not None else _total_p99(state)
+            p_other = _total_p99(other)
+            out["p99_without"], out["p99_with"] = (p_other, current) if implemented else (current, p_other)
         return out
 
     def control_values(self, tail: bool = True) -> Dict[str, Any]:
         """Every active control with an effect, valued; and those not yet quantified."""
-        risks = self._decision_state()
+        ctx = self._new_ctx()
+        risks = ctx["state"]
+        drivers = ctx["drivers"]
         controls = [c for c in self.repo.list(Control) if c.implementation_status in ACTIVE]
         base = _total_p99(risks) if (tail and risks) else None
-        valued = [self._value(c, risks, tail, base) for c in controls if self._has_effect(c) and c.risk_ids]
+        valued = []
+        for c in controls:
+            if self._has_effect(c, drivers):
+                v = self._value(c, ctx, tail, base)
+                v.pop("_other")
+                valued.append(v)
         valued.sort(key=lambda v: v["net_benefit"], reverse=True)
-        missing = sorted(({"id": c.id, "name": c.name, "status": c.implementation_status,
-                           "missing": [m for m, ok in (("effect", self._has_effect(c)),
-                                                       ("cost", c.implementation_cost is not None
-                                                        or c.annual_cost is not None),
-                                                       ("risks", bool(c.risk_ids))) if not ok]}
+
+        def gaps(c: Control) -> List[str]:
+            direct = bool(c.frequency_reduction or c.impact_reduction)
+            via_driver = self._driver_part(c, drivers) is not None
+            out = []
+            if not (direct or via_driver):
+                out.append("effect")
+            if c.implementation_cost is None and c.annual_cost is None:
+                out.append("cost")
+            if direct and not c.risk_ids and not via_driver:
+                out.append("risks")
+            return out
+        missing = sorted(({"id": c.id, "name": c.name, "status": c.implementation_status, "missing": gaps(c)}
                           for c in controls), key=lambda x: x["name"])
         return {"controls": valued, "not_quantified": [m for m in missing if m["missing"]],
                 "total_p99": base if base is not None else (_total_p99(risks) if risks else 0.0)}
@@ -109,10 +168,10 @@ class Decisions:
         if budget is None or budget < 0:
             raise ValidationError("budget must be 0 or more.")
         statuses = CANDIDATES if include_in_progress else ("PLANNED",)
-        state = self._decision_state()
-        before = dict(state)
+        ctx = self._new_ctx()
+        before = ctx["state"]
         pool = [c for c in self.repo.list(Control)
-                if c.implementation_status in statuses and self._has_effect(c) and c.risk_ids]
+                if c.implementation_status in statuses and self._has_effect(c, ctx["drivers"])]
         chosen, spent, steps = [], 0.0, []
         while True:
             best = None
@@ -120,7 +179,7 @@ class Decisions:
                 first_year = (c.implementation_cost or 0) + (c.annual_cost or 0)
                 if spent + first_year > budget + 1e-9:
                     continue
-                v = self._value(c, state, tail=False)
+                v = self._value(c, ctx, tail=False)
                 if v["benefit"] <= 0:
                     continue
                 score = v["benefit"] / v["annualised_cost"] if v["annualised_cost"] > 0 else float("inf")
@@ -129,16 +188,21 @@ class Decisions:
             if best is None:
                 break
             _, c, v, first_year = best
-            for rid in c.risk_ids:
-                if rid in state:
-                    state[rid] = dec.apply_effect(state[rid], c.frequency_reduction or 0, c.impact_reduction or 0)
+            dp = self._driver_part(c, ctx["drivers"])
+            if dp:
+                current = ctx["levels"].get(dp[0], ctx["drivers"][dp[0]].level)
+                ctx["levels"][dp[0]] = min(max(current * dp[1], 0.05), 20.0)
+            if self._has_direct(c):
+                ctx["added"].append(c)
+            ctx["state"] = v["_other"]
             pool.remove(c)
             spent += first_year
             chosen.append(c)
             steps.append({"id": c.id, "name": c.name, "first_year_cost": first_year,
                           "annualised_cost": v["annualised_cost"], "benefit": v["benefit"],
                           "net_benefit": v["net_benefit"], "benefit_per_cost": v["benefit_per_cost"],
-                          "cumulative_cost": spent})
+                          "cumulative_cost": spent, "via_driver": v["driver"]["name"] if v["driver"] else None})
+        state = ctx["state"]
         left_out = [{"id": c.id, "name": c.name,
                      "first_year_cost": (c.implementation_cost or 0) + (c.annual_cost or 0)} for c in pool]
         units = {u.id: u.to_dict() for u in self.repo.list(BusinessUnit)}
@@ -168,19 +232,28 @@ class Decisions:
             raise ValidationError("Only a planned or in-progress control can be implemented.")
         if not self._has_effect(c):
             raise ValidationError("The control has no effect registered; set the status by hand instead.")
-        basis = (f"effect of control '{c.name}' built in: frequency -{(c.frequency_reduction or 0):.0%}, "
-                 f"loss per event -{(c.impact_reduction or 0):.0%}")
+        drivers = {d.id: d for d in self.repo.list(Driver)}
+        dp = self._driver_part(c, drivers)
+        basis = f"effect of control '{c.name}' built in"
+        if self._has_direct(c):
+            basis += (f": frequency -{(c.frequency_reduction or 0):.0%}, "
+                      f"loss per event -{(c.impact_reduction or 0):.0%}")
+        if dp:
+            basis += f"; driver '{drivers[dp[0]].name}' -{c.driver_reduction:.0%}"
         reason = f"{self.reason} - {basis}" if self.reason else basis
         with self.context(reason=reason):
-            for rid in c.risk_ids:
-                risk = self.repo.get(Risk, rid)
-                if risk is None:
-                    continue
-                r = dec.apply_effect(risk.to_dict(), c.frequency_reduction or 0, c.impact_reduction or 0)
-                changes = {"residual_frequency": r["residual_frequency"], "residual_impact": r["residual_impact"]}
-                if r.get("residual_outage_hours"):
-                    changes["residual_outage_hours"] = r["residual_outage_hours"]
-                self.update_risk(rid, **changes)
+            if self._has_direct(c):
+                for rid in c.risk_ids:
+                    risk = self.repo.get(Risk, rid)
+                    if risk is None:
+                        continue
+                    r = dec.apply_effect(risk.to_dict(), c.frequency_reduction or 0, c.impact_reduction or 0)
+                    changes = {"residual_frequency": r["residual_frequency"], "residual_impact": r["residual_impact"]}
+                    if r.get("residual_outage_hours"):
+                        changes["residual_outage_hours"] = r["residual_outage_hours"]
+                    self.update_risk(rid, **changes)
+            if dp:  # the driver is the state of things today: the control moves it
+                self.update_driver(dp[0], level=round(min(max(drivers[dp[0]].level * dp[1], 0.05), 20.0), 6))
             return self.update_control(control_id, implementation_status="IMPLEMENTED")
 
 

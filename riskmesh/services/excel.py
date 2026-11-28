@@ -186,6 +186,8 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Lifetime years", "lifetime_years", "number", width=9),
         Col("Fewer events %", "frequency_reduction", "percent", width=10),
         Col("Lower loss per event %", "impact_reduction", "percent", width=10),
+        Col("Improves driver", "driver_id", "ref", ref=Driver, width=24),
+        Col("Lowers the driver %", "driver_reduction", "percent", width=10),
         Col("Description", "description", width=40)]),
     ("Risk events", RiskEvent, [
         Col("Name", "name", required=True, width=28),

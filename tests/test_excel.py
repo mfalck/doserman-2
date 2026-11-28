@@ -111,7 +111,7 @@ def test_replace_removes_missing_rows_and_keeps_missing_sheets(svc):
     assert merge["changes"]["risk_event"]["removed"] == 0 and "control" not in merge["changes"]
     replace = svc.import_excel(content, replace=True)
     assert replace["changes"]["risk_event"]["removed"] == 1
-    assert len(svc.list_risk_events()) == 2 and len(svc.list_controls()) == 9
+    assert len(svc.list_risk_events()) == 2 and len(svc.list_controls()) == 10
 
 
 def test_not_a_workbook_and_hand_made_sheet():

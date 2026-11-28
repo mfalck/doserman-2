@@ -34,7 +34,7 @@ def test_every_page_renders_with_data(window):
                                        for n in ("Overview", "Organisation", "Risks", "Controls"))
     assert dashboard.top.rowCount() == 5 and dashboard.cards["risks"].value.text() == "7"
     assert org.tree.topLevelItemCount() == 1
-    assert risks.table.rowCount() == 7 and controls.table.rowCount() == 9
+    assert risks.table.rowCount() == 7 and controls.table.rowCount() == 10
 
 
 def test_analysis_page_runs_and_reuses(window):

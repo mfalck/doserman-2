@@ -121,3 +121,44 @@ def test_api():
     assert client.patch(f"/api/controls/{x['vague'].id}", json={"frequency_reduction": 1.5}).status_code == 422
     r = client.post(f"/api/controls/{x['cheap'].id}/implement")
     assert r.status_code == 200 and r.json()["implementation_status"] == "IMPLEMENTED"
+
+
+def build_with_driver(svc):
+    x = build(svc)
+    d = svc.create_driver("Hygiene")
+    svc.create_driver_effect(d.id, x["a"].id, frequency_sensitivity=1.0)
+    svc.create_driver_effect(d.id, x["b"].id, frequency_sensitivity=1.0)
+    auto = svc.create_control(x["it"].id, "Automation", implementation_cost=30_000, annual_cost=10_000,
+                              driver_id=d.id, driver_reduction=0.5)
+    return {**x, "driver": d, "auto": auto}
+
+
+def test_control_through_a_driver_helps_every_driven_risk(svc):
+    build_with_driver(svc)
+    v = {c["name"]: c for c in svc.control_values()["controls"]}
+    auto = v["Automation"]
+    # A 100k -> 50k, B 50k -> 25k: no direct link to either risk
+    assert auto["benefit"] == pytest.approx(75_000) and auto["risk_count"] == 2
+    assert auto["driver"]["name"] == "Hygiene" and auto["p99_without"] > auto["p99_with"]
+
+
+def test_plan_and_implement_through_a_driver(svc):
+    x = build_with_driver(svc)
+    p = svc.investment_plan(1_000_000)
+    names = [c["name"] for c in p["chosen"]]
+    assert names[0] == "Automation" and p["chosen"][0]["via_driver"] == "Hygiene"
+    # Cheap on top of the halved driver: A 50k -> 25k
+    assert next(c for c in p["chosen"] if c["name"] == "Cheap")["benefit"] == pytest.approx(25_000)
+    svc.implement_control(x["auto"].id)
+    assert svc.get_driver(x["driver"].id).level == pytest.approx(0.5)
+    v = {c["name"]: c for c in svc.control_values()["controls"]}
+    assert v["Automation"]["status"] == "IMPLEMENTED" and v["Automation"]["benefit"] == pytest.approx(75_000)
+
+
+def test_driver_reduction_validation(svc):
+    it = svc.create_business_unit("IT")
+    d = svc.create_driver("D")
+    with pytest.raises(ValidationError):
+        svc.create_control(it.id, "X", driver_reduction=0.3)
+    with pytest.raises(ValidationError):
+        svc.create_control(it.id, "Y", driver_id=d.id, driver_reduction=0.95)

@@ -210,6 +210,8 @@ class ControlCreate(_In):
     lifetime_years: float = Field(3.0, gt=0)
     frequency_reduction: Optional[float] = Field(None, ge=0, le=0.99)
     impact_reduction: Optional[float] = Field(None, ge=0, le=0.99)
+    driver_id: Optional[str] = None
+    driver_reduction: Optional[float] = Field(None, ge=0, le=0.9)
 
 
 class ControlUpdate(_In):
@@ -226,6 +228,8 @@ class ControlUpdate(_In):
     lifetime_years: Optional[float] = Field(None, gt=0)
     frequency_reduction: Optional[float] = Field(None, ge=0, le=0.99)
     impact_reduction: Optional[float] = Field(None, ge=0, le=0.99)
+    driver_id: Optional[str] = None
+    driver_reduction: Optional[float] = Field(None, ge=0, le=0.9)
 
 
 class ControlOut(_Out):
@@ -242,6 +246,8 @@ class ControlOut(_Out):
     lifetime_years: float = 3.0
     frequency_reduction: Optional[float] = None
     impact_reduction: Optional[float] = None
+    driver_id: Optional[str] = None
+    driver_reduction: Optional[float] = None
 
 
 # -- Third parties: suppliers, services, customers --------------------------------

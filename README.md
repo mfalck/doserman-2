@@ -363,6 +363,12 @@ twice), and shows the expected loss, P90 and P99 before and after, and which
 appetites and objective tolerances that changes. Tail figures come from the
 analytic engine (risks independent).
 
+A control can also work **through a driver**: `driver_id` and
+`driver_reduction` (e.g. patch automation lowers "patch and access hygiene" by
+35%). It is then valued on every risk the driver drives, including risks it is
+not linked to directly. The plan takes it into account for every control picked
+after it, and implementing it lowers the driver's level.
+
 `POST /api/controls/{id}/implement` marks a planned control implemented and
 builds its effect into the residual estimates of its risks, recorded in the
 audit log, so it is not counted twice afterwards.

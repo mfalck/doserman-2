@@ -383,6 +383,8 @@ class Control(Entity):
     lifetime_years: float = 3.0                  # the implementation cost is spread over this
     frequency_reduction: Optional[float] = None  # share of events it prevents, 0-0.99
     impact_reduction: Optional[float] = None     # share of the loss per event it removes, 0-0.99
+    driver_id: Optional[str] = None              # a driver it improves, e.g. patch automation -> patch hygiene
+    driver_reduction: Optional[float] = None     # share it lowers that driver's level by, 0-0.9
 
 
 @dataclass
@@ -609,6 +611,7 @@ REFERENCES = [
     (DriverEffect, "risk_id", Risk, False, "DRIVEN"),
     (Scenario, "outage_supplier_id", Supplier, False, "SCENARIO_OUTAGE"),
     (Scenario, "outage_service_id", Service, False, "SCENARIO_OUTAGE"),
+    (Control, "driver_id", Driver, False, "IMPROVES"),
     (Correlation, "risk_a_id", Risk, False, "CORRELATES"),
     (Correlation, "risk_b_id", Risk, False, "CORRELATES"),
     (Appetite, "business_unit_id", BusinessUnit, False, "APPLIES_TO"),
