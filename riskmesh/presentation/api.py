@@ -618,6 +618,16 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     async def get_customer(customer_id: str):
         return svc.get_customer(customer_id).to_dict()
 
+    @api.get("/customers/{customer_id}/report", tags=["third parties"])
+    async def customer_report(customer_id: str):
+        """The customer's assurance report as data (with a SHA-256 fingerprint of its content)."""
+        return svc.customer_report(customer_id)
+
+    @api.get("/customers/{customer_id}/report.html", tags=["third parties"])
+    async def customer_report_html(customer_id: str):
+        """The assurance report as a printable page (print / save as PDF in the browser)."""
+        return Response(svc.customer_report_html(customer_id), media_type="text/html; charset=utf-8")
+
     @api.get("/customers/{customer_id}/dora", tags=["third parties"])
     async def customer_dora(customer_id: str):
         """What the customer's DORA register of information needs from us (providers, supply chain, gaps)."""

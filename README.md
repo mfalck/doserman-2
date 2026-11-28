@@ -500,6 +500,34 @@ register, the next deadlines across all incidents and a "sent now" button per
 deadline. Incidents are in the Excel workbook and the audit log. A working aid,
 not legal advice: check the national NIS2 rules and the customers' contracts.
 
+## Customer assurance report
+
+One page per customer, to print or save as PDF from the browser
+(`GET /api/customers/{id}/report.html`; data at `/report`):
+
+- the services we deliver to it (criticality, RTO, RPO) and the suppliers
+  behind them, by rank for DORA customers;
+- the risks to those services, with controls, and the controls with their
+  latest test;
+- our expected penalty exposure to the customer from outages (expected,
+  1 in 10, 1 in 100);
+- our objectives for those services and whether they are within tolerance;
+- incidents in the last 12 months that hit the customer, and whether we
+  notified it in time;
+- open points: what a review of the chain or the contract would flag.
+
+The footer carries the audit chain entry the report was made from, the latest
+closed reporting period and a SHA-256 fingerprint of the report's content, so
+the copy a customer holds can be checked against what we issued. Everything
+in it is visible to the customer: decide whether internal figures such as
+objectives and planned controls belong in what you send.
+
+```bash
+riskmesh third-party report "East Savings Bank" report.html
+```
+
+In the web app: Third parties → a customer → *Assurance report*.
+
 ## DORA: what a financial customer's register needs from us
 
 A financial entity's register of information covers its ICT providers and the

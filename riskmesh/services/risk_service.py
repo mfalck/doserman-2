@@ -27,6 +27,7 @@ from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, 
                              Person, Risk, RiskEvent)
 from ..storage.base import E, Repository
 from .anchors import ANCHOR_WRITE_METHODS, AnchorAdmin
+from .customer_report import CustomerReport
 from .decisions import DECISION_WRITE_METHODS, Decisions
 from .dora import DoraExtract
 from .drivers import DRIVER_WRITE_METHODS, Drivers
@@ -68,7 +69,7 @@ def _is_optional(cls: Type[Entity], field_name: str) -> bool:
 
 class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Incidents, DoraExtract, Evidence,
                   Objectives, Decisions, Drivers,
-                  Scenarios, ExcelExchange):
+                  Scenarios, CustomerReport, ExcelExchange):
 
     def __init__(self, repo: Repository, scoring: Optional[ScoringScale] = None, actor: str = "system",
                  source: str = "system"):

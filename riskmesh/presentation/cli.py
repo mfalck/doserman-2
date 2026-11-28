@@ -158,6 +158,15 @@ def _third_party(args, svc: RiskService) -> int:
             h = x["shortest_notification_hours"]
             print(f"{x['name'][:27]:<28}{x['criticality']:<12}{x['supplier_count']:>10}{x['customer_count']:>10}"
                   f"{money(x['contract_value'])}  {'' if h is None else f'{h:g} h'}")
+    elif cmd == "report":
+        cust = _find(svc.list_customers(), args.customer)
+        if not cust:
+            print(f"Error: no customer called {args.customer!r}", file=sys.stderr)
+            return 1
+        with open(args.file, "w", encoding="utf-8") as f:
+            f.write(svc.customer_report_html(cust.id))
+        print(f"Assurance report for {cust.name} written to {args.file}; fingerprint "
+              f"{svc.customer_report(cust.id)['report_hash'][:16]}... (open it and print / save as PDF)")
     elif cmd == "dora":
         cust = _find(svc.list_customers(), args.customer)
         if not cust:
@@ -328,6 +337,9 @@ def build_parser() -> argparse.ArgumentParser:
     tp_sub.add_parser("findings", help="what a NIS2/DORA review would ask about")
     tpe = tp_sub.add_parser("exposure", help="who is hit if a supplier or service fails")
     tpe.add_argument("name", help="supplier or service name (or id)")
+    tpr = tp_sub.add_parser("report", help="a customer's assurance report as a printable HTML page")
+    tpr.add_argument("customer", help="customer name")
+    tpr.add_argument("file", help="where to write the .html (open it and print / save as PDF)")
     tpd = tp_sub.add_parser("dora", help="what a DORA customer's register of information needs from us")
     tpd.add_argument("customer", help="customer name")
     tpd.add_argument("--xlsx", metavar="FILE", help="also write it as an Excel workbook")
