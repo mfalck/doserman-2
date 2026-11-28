@@ -123,6 +123,10 @@ class Risk(Entity):
     # (e.g. ["data breach", "phishing"]); the risk's own category always counts too
     evidence_categories: List[str] = field(default_factory=list)
     objective_ids: List[str] = field(default_factory=list)   # objectives this risk threatens directly
+    # how it was assessed: "quantitative" (the specs above, entered directly) or a method plugin such as
+    # "iso27005" or "fair" whose inputs are kept here and from which the specs above are derived
+    method: str = "quantitative"
+    method_inputs: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

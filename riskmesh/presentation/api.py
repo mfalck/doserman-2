@@ -691,6 +691,14 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         d = body.model_dump()
         return svc.create_control(d.pop("business_unit_id"), d.pop("name"), **d).to_dict()
 
+    @api.get("/methods", tags=["meta"])
+    async def list_methods():
+        """The assessment methods available (plugins) and their input fields, for building forms."""
+        from ..domain import methods as m_
+        return [{"key": "quantitative", "label": "Quantitative (frequency and loss distributions)",
+                 "version": "1", "description": "Enter the distributions directly.", "fields": []}] + \
+            [x.describe() for x in m_.all_methods()]
+
     @api.get("/scenarios/overview", tags=["scenarios"])
     async def scenario_overview():
         """Every scenario next to today: total, P99 and which appetites and objectives it breaks."""

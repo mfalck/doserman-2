@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type
 
-from ..domain import analytic, audit, risk_model
+from ..domain import analytic, audit, methods, risk_model
 from ..domain.consequences import Severity
 from ..domain.errors import ConflictError, NotFoundError, ValidationError
 from ..domain.models import (ENTITY_TYPES, AnalysisRun, CONTROL_EVENT_STATUSES, CONTROL_EVENT_TYPES, CONTROL_TYPES, DATA_TYPES,
@@ -388,6 +388,19 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
             e.service_ids = list(dict.fromkeys(e.service_ids or []))
             e.supplier_ids = list(dict.fromkeys(e.supplier_ids or []))
             e.objective_ids = list(dict.fromkeys(e.objective_ids or []))
+            if e.method and e.method != methods.QUANTITATIVE:
+                try:
+                    m = methods.get(e.method)
+                    inputs = m.validate(e.method_inputs or {})
+                except ValueError as ex:
+                    raise ValidationError(f"Risk '{e.name}': {ex}") from ex
+                e.method_inputs = {**inputs, "method_version": m.version}
+                for f, spec in m.to_specs(inputs, self.scoring).items():
+                    setattr(e, f, spec)
+            else:
+                e.method, e.method_inputs = methods.QUANTITATIVE, {}
+                if not e.frequency or not e.impact:
+                    raise ValidationError(f"Risk '{e.name}': give a frequency and an impact, or an assessment method.")
             e.evidence_categories = list(dict.fromkeys(str(c).strip() for c in e.evidence_categories or []
                                                        if str(c).strip()))
             try:
@@ -570,10 +583,10 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
     # Risks
     # =====================================================================
 
-    def create_risk(self, unit_id: str, name: str, frequency: Dict[str, Any], impact: Dict[str, Any],
-                    **optional: Any) -> Risk:
+    def create_risk(self, unit_id: str, name: str, frequency: Optional[Dict[str, Any]] = None,
+                    impact: Optional[Dict[str, Any]] = None, **optional: Any) -> Risk:
         """Optional: description, category, asset_ids, owner_id, residual_frequency, residual_impact,
-        service_ids, supplier_ids."""
+        service_ids, supplier_ids; or method + method_inputs instead of frequency/impact."""
         return self._create(Risk, name=name, business_unit_id=unit_id, frequency=frequency, impact=impact,
                             **optional)
 
@@ -615,7 +628,13 @@ class RiskService(UserAdmin, AnchorAdmin, Reporting, ThirdParty, Portfolio, Inci
         """A risk as presented to clients: stored fields + derived scores + linked controls."""
         if controls_by_risk is None:
             controls_by_risk = self._controls_by_risk()
-        return {**risk.to_dict(), "scores": self.risk_scores(risk, graph),
+        summary = None
+        if risk.method and risk.method != methods.QUANTITATIVE:
+            try:
+                summary = methods.get(risk.method).summary(risk.method_inputs)
+            except (ValueError, KeyError):
+                summary = None
+        return {**risk.to_dict(), "method_summary": summary, "scores": self.risk_scores(risk, graph),
                 "control_ids": controls_by_risk.get(risk.id, [])}
 
     def _controls_by_risk(self) -> Dict[str, List[str]]:

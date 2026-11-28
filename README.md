@@ -120,6 +120,46 @@ risk/control events and asset editing (use the web app, CLI or API).
 
 Risks are treated as independent of each other.
 
+### Assessment methods: ISO 27005, FAIR or your own
+
+A risk can also be assessed in the terms of a method instead of with
+distributions: `"method": "iso27005"` or `"fair"` plus `method_inputs`. The
+method plugin translates the inputs into the common model (frequency and loss
+per event, inherent and after controls). Every engine, analysis and report then
+works unchanged, and the inputs and the method's version are kept, so the
+assessment can be read back in its own terms.
+
+- **ISO/IEC 27005** - likelihood and consequence 1-5 (and after controls).
+  They are translated with the scoring scale: the frequency is the middle of the
+  likelihood band and the loss a lognormal range over the consequence band, so
+  the derived 1-5 scores are exactly the levels that were rated and the 5x5
+  heat map shows them. Qualitative risks also count in totals and appetite as
+  indicative figures, which is useful as a consistency check next to
+  quantified risks.
+- **FAIR** - threat event frequency and vulnerability (three-point
+  estimates), loss event frequency = TEF x vulnerability, loss = primary loss
+  + P(secondary) x secondary loss. Becomes a Poisson rate and a PERT with the
+  combined range and expected value. Residual: vulnerability and/or TEF (and
+  primary loss) after controls.
+
+```json
+{"name": "Ransomware", "business_unit_id": "...", "method": "fair",
+ "method_inputs": {"tef": {"min": 2, "mode": 6, "max": 20},
+                   "vulnerability": {"min": 0.01, "mode": 0.03, "max": 0.1},
+                   "primary_loss": {"min": 100000, "mode": 500000, "max": 3000000},
+                   "residual_vulnerability": 0.01}}
+```
+
+`GET /api/methods` lists the methods and their input fields, so a client can
+build the form without knowing the method; `riskmesh methods` does the same on
+the command line. A new method is a class with the `RiskMethod` interface
+(`riskmesh/domain/methods.py`), registered with `methods.register(...)` or
+shipped in another package through the entry point group `riskmesh.methods`.
+No change to the core is needed. In the Excel workbook the Risks sheet has
+*Method* and *Method inputs (JSON)*. The web app's risk form shows the
+quantitative fields only for now. A risk with a method gets its distributions
+from the method, so edit its inputs rather than the distributions.
+
 ### Two calculation engines
 
 | | `analytic` (default) | `monte_carlo` |

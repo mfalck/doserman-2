@@ -104,10 +104,10 @@ def seed_demo(svc: RiskService) -> None:
         impact={"dist": "lognorm_p10_p90", "p10": 20_000, "p90": 400_000},
         category="financial", asset_ids=[records.id], owner_id=john.id, evidence_categories=["payment fraud"],
     )
-    svc.create_risk(
-        hr.id, "Loss of key personnel",
-        frequency={"type": "poisson", "rate": 1.0},
-        impact={"dist": "triangular", "min": 30_000, "mode": 80_000, "max": 300_000},
+    svc.create_risk(  # assessed the ISO 27005 way: levels 1-5, translated with the scoring scale
+        hr.id, "Loss of key personnel", method="iso27005",
+        method_inputs={"likelihood": 4, "consequence": 2,
+                       "rationale": "Two of five architects left in the last three years; hiring takes 4-6 months"},
         category="operational", owner_id=mike.id,
     )
     churn = svc.create_risk(

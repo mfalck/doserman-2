@@ -122,8 +122,8 @@ class PersonOut(_Out):
 class RiskCreate(_In):
     name: str
     business_unit_id: str
-    frequency: Spec = Field(..., examples=[FREQUENCY_EXAMPLE])
-    impact: Spec = Field(..., examples=[IMPACT_EXAMPLE])
+    frequency: Optional[Spec] = Field(None, examples=[FREQUENCY_EXAMPLE])
+    impact: Optional[Spec] = Field(None, examples=[IMPACT_EXAMPLE])
     description: Optional[str] = None
     category: Optional[str] = None
     asset_ids: List[str] = []
@@ -137,6 +137,8 @@ class RiskCreate(_In):
     residual_outage_hours: Optional[Spec] = None
     evidence_categories: List[str] = []
     objective_ids: List[str] = []
+    method: str = "quantitative"
+    method_inputs: Dict[str, Any] = {}
 
 
 class RiskUpdate(_In):
@@ -156,6 +158,8 @@ class RiskUpdate(_In):
     residual_outage_hours: Optional[Spec] = None
     evidence_categories: Optional[List[str]] = None
     objective_ids: Optional[List[str]] = None
+    method: Optional[str] = None
+    method_inputs: Optional[Dict[str, Any]] = None
 
 
 class ScoreOut(BaseModel):
@@ -192,6 +196,9 @@ class RiskOut(_Out):
     control_ids: List[str] = []
     evidence_categories: List[str] = []
     objective_ids: List[str] = []
+    method: str = "quantitative"
+    method_inputs: Dict[str, Any] = {}
+    method_summary: Optional[str] = None
 
 
 # -- Controls ---------------------------------------------------------------

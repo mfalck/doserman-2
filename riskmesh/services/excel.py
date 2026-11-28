@@ -142,6 +142,8 @@ SHEETS: List[Tuple[str, Type[Entity], List[Col]]] = [
         Col("Suppliers", "supplier_ids", "refs", ref=Supplier, width=22),
         Col("Evidence categories", "evidence_categories", "list", width=24),
         Col("Threatens objectives", "objective_ids", "refs", ref=Objective, width=28),
+        Col("Method", "method", width=14),
+        Col("Method inputs (JSON)", "method_inputs", "json", width=40),
         Col("Description", "description", width=40)]),
     ("Drivers", Driver, [
         Col("Name", "name", required=True, width=30), Col("Level", "level", "number", width=8),
@@ -248,6 +250,8 @@ README = [
     "    uniform: min and max; fixed: fixed. Leave the model empty for 'none' (e.g. no residual estimate).",
     "- Outage hours: how long one event takes the linked services down (costs and customer penalties per hour).",
     "- Incidents: times as YYYY-MM-DD HH:MM; NIS2 significant yes, no or empty (not yet assessed).",
+    "- Risks: Method 'quantitative' uses the columns above; 'iso27005' or 'fair' take their inputs from the",
+    "    Method inputs column (JSON, e.g. {\"likelihood\": 4, \"consequence\": 3}) and fill in the distributions.",
     "- Scenarios: drivers at other levels ('Economic climate=1.5'), risks hit harder ('Ransomware attack:",
     "    frequency 3, impact 1.5'; separate several with ';') and/or an outage of a supplier or service.",
     "- Drivers: common causes. Level 1 = as estimated; Bad-year multiplier e.g. 1.5. Driver effects: how",

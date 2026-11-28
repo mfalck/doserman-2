@@ -350,6 +350,7 @@ def build_parser() -> argparse.ArgumentParser:
     tps.add_argument("hours", type=float)
     sub.add_parser("tree", help="show the organisation hierarchy")
     sub.add_parser("portfolio", help="correlations between risks and the risk appetite")
+    sub.add_parser("methods", help="the assessment methods available (ISO 27005, FAIR, plugins) and their inputs")
     sub.add_parser("incidents", help="open incidents and the reporting / notification deadlines they start")
     sub.add_parser("objectives", help="objectives, the risks that threaten them and the risk to each")
     scp = sub.add_parser("scenarios", help="named what-if cases compared with today")
@@ -737,6 +738,17 @@ def run(args, svc: RiskService) -> int:
         if args.apply:
             svc.apply_calibration(risk.id, expert_years=args.expert_years)
             print("Applied (recorded in the audit log).")
+    elif args.command == "methods":
+        from ..domain import methods as m_
+        print("quantitative  Frequency and loss distributions, entered directly")
+        for m in m_.all_methods():
+            print(f"\n{m.key:<13} {m.label} (version {m.version})\n              {m.description}")
+            for f in m.fields:
+                print(f"              - {f['name']}{'' if f.get('required') else ' (optional)'}: {f['label']}")
+        counts = {}
+        for r in svc.list_risks():
+            counts[r.method] = counts.get(r.method, 0) + 1
+        print("\nRisks by method: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     elif args.command == "incidents":
         o = svc.incident_overview()
         if not o["open"]:
