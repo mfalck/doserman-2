@@ -326,7 +326,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--reason", help="why you make this change (recorded in the audit log)")
     p.add_argument("--user", help="name recorded in the audit log (default: [user] name or login name)")
+    p.add_argument("-w", "--workspace", help="which workspace to work in (default: RISKMESH_WORKSPACE or default)")
     sub = p.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("workspaces", help="the configured workspaces (independent analyses) and where each is stored")
 
     sub.add_parser("demo", help="replace all data with the example organisation")
 
@@ -504,8 +507,25 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         return 1
+    if args.workspace:
+        try:
+            settings = settings.for_workspace(args.workspace)
+        except KeyError as e:
+            print(f"Configuration error: {e.args[0]}", file=sys.stderr)
+            return 1
     if args.backend:
         settings.backend = args.backend
+
+    if args.command == "workspaces":
+        for ws in settings.workspace_info():
+            here = settings.for_workspace(ws["id"])
+            where = {"json": here.json_path, "sql": here.sql_url, "neo4j": f"{here.neo4j_uri} "
+                     f"database {here.neo4j_database}"}.get(here.backend, "in memory")
+            mark = "*" if ws["id"] == settings.workspace else " "
+            print(f"{mark} {ws['id']:<16} {ws['title']:<32} {here.backend:<6} {where}")
+        if not settings.workspaces:
+            print("Only the default workspace ([storage]); add [workspaces.<id>] tables to riskmesh.toml for more.")
+        return 0
 
     if args.command == "config":
         if args.config_command == "path":
@@ -526,6 +546,8 @@ def main(argv=None) -> int:
         if settings.config_file:
             os.environ["RISKMESH_CONFIG"] = settings.config_file
         os.environ["RISKMESH_BACKEND"] = settings.backend
+        if args.workspace:  # the API's default workspace (requests may pick another with X-Workspace)
+            os.environ["RISKMESH_WORKSPACE"] = args.workspace
         if args.workers > 1 and settings.backend in ("json", "memory"):
             print("Error: several workers need the sql or neo4j backend (json/memory are one process).",
                   file=sys.stderr)

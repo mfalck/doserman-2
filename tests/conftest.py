@@ -9,6 +9,7 @@ WARNING: these tests delete all RiskMesh data in those databases.
 """
 
 import os
+import time
 
 import pytest
 
@@ -49,3 +50,38 @@ def repo(request, tmp_path):
 @pytest.fixture
 def svc(repo):
     return RiskService(repo)
+
+
+# -- a fake OpenID Connect provider (single sign-on tests) -----------------------------
+
+ISSUER = "https://idp.example.com/tenant/v2.0"
+
+
+@pytest.fixture
+def idp(monkeypatch):
+    jwt = pytest.importorskip("jwt")
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
+    jwk.update(kid="k1", use="sig", alg="RS256")
+    state = {"claims": {}}
+
+    def http_get(self, url):
+        if url.endswith("/.well-known/openid-configuration"):
+            return {"issuer": ISSUER, "authorization_endpoint": "https://idp.example.com/authorize",
+                    "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/keys"}
+        return {"keys": [jwk]}
+
+    def http_post(self, url, data):
+        assert data["code"] == "good-code" and data["code_verifier"]
+        now = int(time.time())
+        claims = {"iss": ISSUER, "aud": "rm-client", "sub": "user-123", "iat": now, "exp": now + 300,
+                  "nonce": state["nonce"], "preferred_username": "martin@example.com", "name": "Martin",
+                  **state["claims"]}
+        return {"id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": "k1"})}
+
+    from riskmesh.presentation import oidc
+    monkeypatch.setattr(oidc.OidcClient, "_http_get", http_get)
+    monkeypatch.setattr(oidc.OidcClient, "_http_post", http_post)
+    return state

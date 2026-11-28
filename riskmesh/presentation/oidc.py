@@ -37,6 +37,7 @@ class OidcClient:
         self._discovery: Optional[Dict[str, Any]] = None
         self._jwks: Optional[Dict[str, Any]] = None
         self._pending: Dict[str, Tuple[float, str, str]] = {}  # state -> (created, nonce, pkce verifier)
+        self._context: Dict[str, str] = {}  # state -> what the login was for (the workspace)
 
     # -- HTTP (separate methods so tests can replace them) ---------------------
 
@@ -73,11 +74,14 @@ class OidcClient:
 
     # -- flow ---------------------------------------------------------------------------
 
-    def login_url(self) -> str:
+    def login_url(self, context: str = "") -> str:
         now = time.time()
         self._pending = {k: v for k, v in self._pending.items() if now - v[0] < STATE_TTL}
+        self._context = {k: v for k, v in self._context.items() if k in self._pending}
         state, nonce, verifier = (secrets.token_urlsafe(24) for _ in range(3))
         self._pending[state] = (now, nonce, verifier)
+        if context:
+            self._context[state] = context
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         params = {
             "response_type": "code", "client_id": self.s.oidc_client_id, "redirect_uri": self.s.oidc_redirect_uri,
@@ -85,6 +89,10 @@ class OidcClient:
             "code_challenge": challenge, "code_challenge_method": "S256",
         }
         return self.discovery()["authorization_endpoint"] + "?" + urlencode(params)
+
+    def context_for(self, state: str) -> str:
+        """What the login with this state was started for ("" if nothing)."""
+        return self._context.pop(state, "")
 
     def complete(self, code: str, state: str) -> Dict[str, Any]:
         """Validates the callback and returns the verified ID-token claims."""
@@ -113,20 +121,21 @@ class OidcClient:
             raise AuthenticationError("The ID token does not belong to this login (nonce).")
         return claims
 
-    def role_for(self, claims: Dict[str, Any]) -> str:
-        """Highest RiskMesh role among the mapped claim values, else the default role."""
+    def role_for(self, claims: Dict[str, Any], settings: Optional[Settings] = None) -> str:
+        """Highest RiskMesh role among the mapped claim values, else the default role (of the workspace)."""
+        s = settings or self.s
         values = claims.get(self.s.oidc_role_claim) or []
         if isinstance(values, str):
             values = [values]
         order = ("viewer", "editor", "admin")
-        roles = [self.s.oidc_role_map[v] for v in values if v in self.s.oidc_role_map]
+        roles = [s.oidc_role_map[v] for v in values if v in s.oidc_role_map]
         if roles:
             return max(roles, key=order.index)
-        if self.s.oidc_default_role:
-            return self.s.oidc_default_role
+        if s.oidc_default_role:
+            return s.oidc_default_role
         raise AuthenticationError("Your account has no RiskMesh role. Ask an administrator for access.")
 
-    def identity(self, claims: Dict[str, Any]) -> Dict[str, Any]:
+    def identity(self, claims: Dict[str, Any], settings: Optional[Settings] = None) -> Dict[str, Any]:
         username = (claims.get(self.s.oidc_username_claim) or claims.get("email") or claims["sub"])
         return {"external_id": f"{claims['iss']}|{claims['sub']}", "username": str(username),
-                "display_name": claims.get("name"), "email": claims.get("email"), "role": self.role_for(claims)}
+                "display_name": claims.get("name"), "email": claims.get("email"), "role": self.role_for(claims, settings)}

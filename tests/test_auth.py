@@ -1,11 +1,8 @@
 """Login, roles, tokens and single sign-on through the API."""
 
-import time
 from urllib.parse import parse_qs, urlparse
 
-import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from riskmesh.config import Settings
@@ -102,7 +99,9 @@ def test_requests_need_a_token_and_the_right_role():
     assert c.get("/api/risks").status_code == 401
     assert c.get("/health").status_code == 200
     assert c.get("/api/auth/config").json() == {"mode": "local", "local": True, "oidc": False,
-                                                 "oidc_login_url": None}
+                                                 "oidc_login_url": None, "default_workspace": "default",
+                                                 "workspace": {"id": "default", "title": "Default"},
+                                                 "workspaces": [{"id": "default", "title": "Default"}]}
     viewer, editor, admin = login(c, "vi"), login(c, "ed"), login(c, "admin")
     assert c.get("/api/risks", headers=viewer).status_code == 200
     assert c.post("/api/persons", json={"name": "X"}, headers=viewer).status_code == 403
@@ -165,33 +164,6 @@ def test_bootstrap_admin_from_environment(monkeypatch):
 ISSUER = "https://idp.example.com/tenant/v2.0"
 
 
-@pytest.fixture
-def idp(monkeypatch):
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key(), as_dict=True)
-    jwk.update(kid="k1", use="sig", alg="RS256")
-    state = {"claims": {}}
-
-    def http_get(self, url):
-        if url.endswith("/.well-known/openid-configuration"):
-            return {"issuer": ISSUER, "authorization_endpoint": "https://idp.example.com/authorize",
-                    "token_endpoint": "https://idp.example.com/token", "jwks_uri": "https://idp.example.com/keys"}
-        return {"keys": [jwk]}
-
-    def http_post(self, url, data):
-        assert data["code"] == "good-code" and data["code_verifier"]
-        now = int(time.time())
-        claims = {"iss": ISSUER, "aud": "rm-client", "sub": "user-123", "iat": now, "exp": now + 300,
-                  "nonce": state["nonce"], "preferred_username": "martin@example.com", "name": "Martin",
-                  **state["claims"]}
-        return {"id_token": jwt.encode(claims, key, algorithm="RS256", headers={"kid": "k1"})}
-
-    from riskmesh.presentation import oidc
-    monkeypatch.setattr(oidc.OidcClient, "_http_get", http_get)
-    monkeypatch.setattr(oidc.OidcClient, "_http_post", http_post)
-    return state
-
-
 def sso_login(c, idp, **claims):
     idp["claims"] = claims
     r = c.get("/api/auth/oidc/login", follow_redirects=False)
@@ -208,7 +180,7 @@ def test_single_sign_on_creates_user_with_mapped_role(idp):
                      oidc_role_map={"RiskMesh.Editor": "editor", "RiskMesh.Admin": "admin"})
     location = sso_login(c, idp, roles=["RiskMesh.Editor"])
     assert location.startswith("http://localhost:8080/login#token=")
-    h = {"Authorization": f"Bearer {location.split('#token=')[1]}"}
+    h = {"Authorization": f"Bearer {location.split('#token=')[1].split('&')[0]}"}
     me = c.get("/api/auth/me", headers=h).json()
     assert (me["username"], me["role"], me["auth_source"]) == ("martin@example.com", "editor", "oidc")
     # role follows the provider on the next login

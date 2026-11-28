@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QFont
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QMainWindow,
@@ -54,7 +55,10 @@ class MainWindow(QMainWindow):
         if user is not None:
             self.svc.actor = user.username
         self.role = user.role if user is not None else "admin"
-        self.setWindowTitle(f"RiskMesh {__version__}")
+        title = f"RiskMesh {__version__}"
+        if len(settings.workspace_ids()) > 1:
+            title += f" - {settings.workspace_title}"
+        self.setWindowTitle(title)
         self.resize(1280, 820)
 
         central = QWidget()
@@ -114,6 +118,7 @@ class MainWindow(QMainWindow):
                                      (None, None, None),
                                      ("Load demo data…", self.load_demo, None),
                                      (None, None, None),
+                                     ("Switch workspace…", self.switch_workspace, None),
                                      ("Open configuration file…", self.open_config, None),
                                      ("Show configuration", self.show_config, None),
                                      (None, None, None),
@@ -129,6 +134,8 @@ class MainWindow(QMainWindow):
                 self.admin_actions.append(action)
             if slot == self.import_excel:
                 self.editor_actions.append(action)
+            if slot == self.switch_workspace and len(self.settings.workspace_ids()) < 2:
+                action.setEnabled(False)  # only the default workspace is configured
             file_menu.addAction(action)
         help_menu = self.menuBar().addMenu("&Help")
         about = QAction("About RiskMesh", self)
@@ -144,7 +151,8 @@ class MainWindow(QMainWindow):
             s.neo4j_uri if s.backend == "neo4j" else "in memory (not saved)"
         cfg = os.path.basename(s.config_file) if s.config_file else "no config file (defaults)"
         role = f" ({self.role})" if self.user is not None else ""
-        label = QLabel(f"Backend: <b>{s.backend}</b> – {where} &nbsp;|&nbsp; Config: {cfg} &nbsp;|&nbsp; "
+        ws = f"Workspace: <b>{s.workspace_title}</b> &nbsp;|&nbsp; " if len(s.workspace_ids()) > 1 else ""
+        label = QLabel(f"{ws}Backend: <b>{s.backend}</b> – {where} &nbsp;|&nbsp; Config: {cfg} &nbsp;|&nbsp; "
                        f"User: <b>{self.svc.actor}</b>{role}")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.statusBar().addWidget(label)
@@ -263,6 +271,20 @@ class MainWindow(QMainWindow):
                 new.show()
                 self._replacement = new  # keep a reference
                 self.close()
+
+    def switch_workspace(self) -> None:
+        """Open another workspace in a new window (its own data, users and audit log)."""
+        info = self.settings.workspace_info()
+        labels = [f"{w['title']} ({w['id']})" for w in info]
+        current = next((i for i, w in enumerate(info) if w["id"] == self.settings.workspace), 0)
+        choice, ok = QInputDialog.getItem(self, "Switch workspace", "Workspace:", labels, current, False)
+        if not ok or labels.index(choice) == current:
+            return
+        new = open_window(self.settings.for_workspace(info[labels.index(choice)]["id"]), self)
+        if new:
+            new.show()
+            self._replacement = new  # keep a reference
+            self.close()
 
     def show_config(self) -> None:
         lines = [f"<tr><td>{k}</td><td><b>{v}</b></td></tr>" for k, v in self.settings.public().items()]

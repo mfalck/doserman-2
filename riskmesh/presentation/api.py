@@ -14,6 +14,10 @@ Access ([auth] mode in riskmesh.toml):
               login session or an API token; X-API-Key: <token> also works).
               Roles: viewer = read and run analyses, editor = change risk
               data, admin = users, tokens and replacing all data on import.
+
+Workspaces: the header X-Workspace (or ?workspace=) picks the workspace a
+request works on; without it, the default one. Each workspace has its own
+storage, users and tokens, so a login only works in its own workspace.
 """
 
 import logging
@@ -21,15 +25,16 @@ import os
 import re
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
-from urllib.parse import quote, unquote
+from contextvars import ContextVar
+from typing import Any, Dict, List, Optional, cast
+from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from .. import __version__
-from ..bootstrap import make_service
+from ..bootstrap import Workspaces
 from ..config import Settings, load_settings
 from ..domain import audit
 from ..domain import models as m
@@ -69,6 +74,48 @@ def required_role(method: str, path: str, query: Dict[str, str]) -> str:
     return "editor"
 
 
+class _CurrentService:
+    """Stands for the service of the workspace the current request works on."""
+
+    def __init__(self, workspaces: Workspaces, current: "ContextVar[str]"):
+        object.__setattr__(self, "_workspaces", workspaces)
+        object.__setattr__(self, "_current", current)
+
+    def _target(self) -> RiskService:
+        return self._workspaces.service(self._current.get())
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._target(), name, value)
+
+
+class WorkspaceMiddleware:
+    """Reads X-Workspace (or ?workspace=) and makes it the request's workspace; unknown ones get 404."""
+
+    def __init__(self, app, workspaces: Workspaces, current: "ContextVar[str]"):
+        self.app = app
+        self.workspaces = workspaces
+        self.current = current
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        wid = dict(scope.get("headers") or []).get(b"x-workspace", b"").decode("latin-1").strip()
+        if not wid:
+            wid = (parse_qs(scope.get("query_string", b"").decode("latin-1")).get("workspace") or [""])[0]
+        wid = wid or self.workspaces.default
+        if wid not in self.workspaces:
+            response = JSONResponse(status_code=404, content={"detail": f"Unknown workspace {wid!r}"})
+            return await response(scope, receive, send)
+        token = self.current.set(wid)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            self.current.reset(token)
+
+
 def _bootstrap_admin(svc: RiskService) -> None:
     """For containers: RISKMESH_ADMIN_USER/RISKMESH_ADMIN_PASSWORD create the first admin if there are no users."""
     user, password = os.environ.get("RISKMESH_ADMIN_USER"), os.environ.get("RISKMESH_ADMIN_PASSWORD")
@@ -80,7 +127,10 @@ def _bootstrap_admin(svc: RiskService) -> None:
 
 def create_app(service: Optional[RiskService] = None, settings: Optional[Settings] = None) -> FastAPI:
     settings = settings or load_settings()
-    svc = service or make_service(settings, actor="anonymous", source="api")
+    workspaces = Workspaces(settings, actor="anonymous", source="api", first=service)
+    current_ws: ContextVar[str] = ContextVar("riskmesh_workspace", default=workspaces.default)
+    # every endpoint uses `svc`; it is the service of the request's workspace
+    svc = cast(RiskService, _CurrentService(workspaces, current_ws))
     auth_on = settings.auth_mode != "none"
     if auth_on:
         _bootstrap_admin(svc)
@@ -95,7 +145,7 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        svc.repo.close()
+        workspaces.close()
 
     app = FastAPI(
         lifespan=lifespan,
@@ -103,7 +153,9 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         version=__version__,
         description="Enterprise risk management with quantitative (Monte Carlo) risk analysis.",
     )
-    if settings.cors_origins:
+    app.state.workspaces = workspaces  # e.g. for creating a workspace's first admin in tests
+    app.add_middleware(WorkspaceMiddleware, workspaces=workspaces, current=current_ws)
+    if settings.cors_origins:  # added last, so it is outermost: also answers errors and pre-flight requests
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.cors_origins,
@@ -162,8 +214,13 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
     @auth.get("/config")
     async def auth_config():
         """What the login page should offer."""
-        return {"mode": settings.auth_mode, "local": settings.local_login, "oidc": settings.oidc_login,
-                "oidc_login_url": "/api/auth/oidc/login" if settings.oidc_login else None}
+        here = workspaces.settings_for(current_ws.get())
+        sso = settings.oidc_login and here.workspace_sso
+        return {"mode": settings.auth_mode, "local": settings.local_login, "oidc": sso,
+                "oidc_login_url": f"/api/auth/oidc/login?workspace={quote(here.workspace)}" if sso else None,
+                "workspace": {"id": here.workspace, "title": here.workspace_title},
+                "default_workspace": workspaces.default,
+                "workspaces": workspaces.info() if settings.list_workspaces else []}
 
     @auth.post("/login")
     async def login(body: s.LoginRequest, request: Request):
@@ -198,7 +255,7 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         user = svc.resolve_token(_token_from(authorization, x_api_key))
         if user is None:
             raise AuthenticationError("Please log in.")
-        return {**svc.user_view(user), "auth_mode": settings.auth_mode}
+        return {**svc.user_view(user), "auth_mode": settings.auth_mode, "workspace": current_ws.get()}
 
     @auth.post("/password")
     async def change_own_password(body: s.PasswordChange, authorization: Optional[str] = Header(None)):
@@ -212,9 +269,9 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
 
     @auth.get("/oidc/login")
     async def oidc_login():
-        if oidc is None:
+        if oidc is None or not workspaces.settings_for(current_ws.get()).workspace_sso:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Single sign-on is not enabled")
-        return RedirectResponse(oidc.login_url(), status_code=302)
+        return RedirectResponse(oidc.login_url(context=current_ws.get()), status_code=302)
 
     @auth.get("/oidc/callback")
     async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None,
@@ -222,17 +279,28 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
         if oidc is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Single sign-on is not enabled")
         target = settings.oidc_frontend_url.rstrip("/") + "/login"
+        # the provider calls back without our header: the workspace was remembered with the login's state
+        wid = oidc.context_for(state or "") or workspaces.default
+        if wid not in workspaces:
+            wid = workspaces.default
+        ws_part = f"&workspace={quote(wid)}"
+        reset = current_ws.set(wid)
         try:
             if error:
                 raise AuthenticationError(error_description or error)
-            ident = oidc.identity(oidc.complete(code or "", state or ""))
+            here = workspaces.settings_for(wid)
+            if not here.workspace_sso:
+                raise AuthenticationError("Single sign-on is not enabled for this workspace.")
+            ident = oidc.identity(oidc.complete(code or "", state or ""), here)
             with svc.context(actor=ident["username"], source="api:oidc"):
                 user = svc.upsert_external_user(ident["external_id"], ident["username"], ident["role"],
                                                 ident["display_name"], ident["email"])
                 token, _ = svc.issue_token(user.id, "session", hours=settings.session_hours)
         except AuthenticationError as e:
-            return RedirectResponse(f"{target}#error={quote(str(e))}", status_code=302)
-        return RedirectResponse(f"{target}#token={token}", status_code=302)
+            return RedirectResponse(f"{target}#error={quote(str(e))}{ws_part}", status_code=302)
+        finally:
+            current_ws.reset(reset)
+        return RedirectResponse(f"{target}#token={token}{ws_part}", status_code=302)
 
     # -- users and API tokens (admin) -------------------------------------------
 
@@ -295,7 +363,9 @@ def create_app(service: Optional[RiskService] = None, settings: Optional[Setting
 
     @app.get("/health", tags=["meta"])
     async def health():
-        return {"status": "ok", "backend": settings.backend if service is None else type(svc.repo).__name__}
+        here = workspaces.settings_for(current_ws.get())
+        return {"status": "ok", "workspace": here.workspace,
+                "backend": here.backend if service is None else type(svc.repo).__name__}
 
     # -- business units ----------------------------------------------------
 

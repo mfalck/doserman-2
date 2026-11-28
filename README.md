@@ -82,9 +82,56 @@ Environment variables override the file (PowerShell: `$env:NAME = "value"`):
 | `RISKMESH_AUTH_MODE` | `none`, `local`, `oidc` or `local+oidc` | `none` |
 | `RISKMESH_ADMIN_USER` / `_PASSWORD` | create the first admin when the API starts and there are no users | |
 | `RISKMESH_CORS_ORIGINS` | comma-separated origins allowed to call the API | none |
+| `RISKMESH_WORKSPACE` | which workspace the CLI and desktop app open | `default` |
 
 Credentials live only in the environment of the server, never in code or in
 the browser.
+
+### Workspaces: independent analyses
+
+A consultant with several engagements, or a group with companies that must not
+see each other's data, keeps each analysis in its own **workspace**. A
+workspace is a storage location of its own: a JSON file, a SQL database or a
+Neo4j database. There is no shared database with a workspace column, so one
+workspace's data, users, API tokens, audit log and run register can never leak
+into another.
+
+```toml
+[storage]                      # the workspace "default"
+title = "Our own organisation"
+backend = "json"
+json_path = "own.json"
+
+[workspaces.acme]
+title = "ACME A/S - NIS2 2026"
+json_path = "acme.json"
+
+[workspaces.bank]
+title = "Bank - DORA"
+backend = "sql"
+sql_url = "postgresql+psycopg://riskmesh@db/bank"
+sso = false                    # no single sign-on into this one
+```
+
+- **Checks.** Two workspaces may not point at the same file or database; the
+  configuration is refused if they do.
+- **CLI.** `riskmesh workspaces` lists the workspaces and where each is
+  stored. `riskmesh -w acme simulate` works in one of them.
+- **Desktop app.** *File → Switch workspace…* opens another workspace.
+- **API and web app.** The header `X-Workspace: acme` (or `?workspace=acme`)
+  picks the workspace for a request; the web app has a workspace picker on the
+  login page and in the sidebar. Without the header the API uses the default
+  workspace.
+- **Access.** Each workspace has its own users, so access is granted per
+  workspace: a login or API token only works in the workspace it was issued
+  in. Create a workspace's first admin with `riskmesh -w acme users
+  create-admin <name>`.
+- **Single sign-on.** It works per workspace. A workspace can turn it off
+  (`sso = false`) or use its own `role_map` and `default_role`, for example
+  only an Entra ID group for that engagement.
+- **Listing.** The login page lists the workspace titles. Set
+  `[workspaces] list = false` to hide them; users then follow a link such as
+  `https://riskmesh.example.com/login?workspace=acme`.
 
 ## Desktop application
 
